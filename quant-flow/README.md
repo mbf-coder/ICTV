@@ -23,7 +23,7 @@ Archivo: `QuantumFlowAnalyzer_v6.pine` (un solo script, sin librerías externas)
 | **3 · Tendencia y Momentum** | Longitudes de DI/ADX/ATR y momentum, y umbrales de ADX (tendencia mínima y fuerza alta). |
 | **4 · SMC y Zonas** | Fuerza del swing, barras para localizar el Order Block, máximo de OB y FVG, extensión de las cajas, lookback de premium/discount y tolerancia de zona (× ATR). |
 | **5 · Perfil de Volumen** | Mostrar POC/VAH/VAL, número de bins, barras del perfil y % de value area. |
-| **6 · Panel y Decisión** | Mostrar panel, posición, tamaño de texto, umbrales de señal (fuerte y normal), exigir zona de interés para señales fuertes, y los 5 pesos del score. |
+| **6 · Panel y Decisión** | Mostrar panel, posición, tamaño de texto, **modo de panel** (`Completo` / `Mobile` / `Predictor`), **horizonte de predicción** (velas), umbrales de señal (fuerte y normal), exigir zona de interés para señales fuertes, y los 5 pesos del score. |
 | **7 · Footprint** | **Activar/desactivar** la tabla de footprint, filas de precio, posición y ratio de desequilibrio. |
 | **8 · Sesiones Londres/NY** | Filtro por killzones de Londres y Nueva York (sesiones + zona horaria): fuera de sesión el score se atenúa (× penalización) y las señales FUERTE exigen estar en killzone. |
 
@@ -48,6 +48,28 @@ datos (`Perfil strong/soft/adxMin/adxStrong/deltaK`). Solo cambian umbrales,
 pesos y sensibilidad del delta: las longitudes de cálculo no se tocan. El
 escenario 9 de la suite compila cada perfil y lo pasa por datos sintéticos y
 reales (BTCUSDT 15m).
+
+## Modos de panel (incluye Mobile 6.7")
+
+El ajuste **Modo de panel** (grupo 6) cambia cómo se presenta la misma información,
+sin quitar ninguna fila (29 filas × 4 columnas en los tres modos):
+
+| Modo | Para qué sirve | Qué cambia |
+|---|---|---|
+| **Completo** | Escritorio / análisis a fondo | Todo el detalle: zona completa, motivo largo, pie estándar. |
+| **Mobile** | Pantallas de **6.7 pulgadas** o menores | Textos cortos (`OB ALC`, `DISC 40%`, `RSI 55`, reloj `HH:mm`), cabecera con el modo, y el motivo/pie resumidos con el pronóstico. Usa tamaño `Normal` o `Grande` para leerlo bien en el móvil. |
+| **Predictor** | Operativa guiada por pronóstico | El motivo y el pie **priorizan el pronóstico** (`BAJA a 148.66 (-0.41%) · P58%`), la fila de estructura muestra la dirección (`ALCISTA FUERTE`…), y la fila de stops muestra el **rango predicho** en vez de `long / short`. |
+
+## Radar de tendencia y predictor de precio
+
+Además del score, cada vela calcula:
+
+- **RSI (14)** de confirmación, **DI spread** (`+DI − −DI` con flecha ▲/▼ si el ADX sube o baja) y **pendiente de la EMA media** (% del ATR).
+- **Fuerza de tendencia 0–100 %** (EMAs + ADX + DI + pendiente) y **dirección** (`ALCISTA FUERTE` / `ALCISTA` / `LATERAL` / `BAJISTA` / `BAJISTA FUERTE`), visibles en las filas de ADX, Momentum, EMAs y Estructura.
+- **Precio predicho**: extrapola el momentum a `Horizonte de predicción` velas (por defecto 5) y lo combina con el score (`predMove = mom/n·H + score/100·ATR·0.8`); el panel muestra precio, retorno %, **rango** (`pred ± ATR/2`) y **probabilidad direccional** (`50 + score·0.35 + (control−50)·0.3`, acotada 5–95 %). Todo queda también en la ventana de datos (`RSI`, `DI spread`, `Fuerza tendencia`, `Precio predicho`, `Predicho alto/bajo`, `Prob subida %`).
+
+Es una **proyección lineal del estado actual** (no magia): úsala como brújula de
+dirección y fuerza, no como garantía. No es asesoramiento financiero.
 
 ## Cómo leer el panel
 
@@ -95,7 +117,7 @@ Ejecuta 5 pasos y devuelve código 0 solo si todos pasan:
    sin condiciones numéricas, `var … = na` con tipo, formatos de `str.tostring`, `security_lower_tf`
    con tupla y arrays con guarda de tamaño, tipos de receptor `table/box/line/array`).
 3. **Autoprueba del lint** → inyecta 18 defectos y comprueba que los detecta.
-4. **Runtime con PineTS** → 12 escenarios: 5 sobre 600 barras sintéticas (series sin NaN,
+4. **Runtime con PineTS** → 13 escenarios: 5 sobre 600 barras sintéticas (series sin NaN,
    panel de 29 filas con 12 merges y decisión válida, footprint ON/OFF, modo proxy, todo
    apagado, warmup corto) + presupuesto de objetos TV (labels/boxes/lines/tablas bajo el 80 %
    del límite) + perfiles por símbolo/timeframe (los 5 compilan en sintético con sus umbrales)
@@ -104,11 +126,14 @@ Ejecuta 5 pasos y devuelve código 0 solo si todos pasan:
    decisión válida y cero NaN post-warmup) + filtro de sesiones Londres/NY (OFF sin atenuar,
    fuera de sesión con score × penalización y FUERTE bloqueado, en sesión sin atenuar)
    + ciclo de vida del OB (toque → mitigación → invalidación + limpieza automática)
+   + modos Completo/Mobile/Predictor (los 3 compilan sin warnings, panel de 29 filas
+   intacto, RSI/fuerza/probabilidad/precio predicho finitos y en rango)
    + backtest mínimo de señales FUERTE (nº de señales, win-rate a H=10 barras y MFE/MAE
    medios; sintético determinista + BTCUSDT 15m N=500 con SKIP sin red). Sin red,
    los escenarios reales se omiten con SKIP sin romper la suite.
-5. **Checklist de misión** → 36 requisitos (panel, decisión, footprint, OB con toque/mitigación/invalidación/limpieza, zonas,
-   indicadores, alertas, perfiles por símbolo/timeframe, filtro de sesiones y banderas SIG FUERTE para backtest).
+5. **Checklist de misión** → 45 requisitos (panel, decisión, footprint, OB con toque/mitigación/invalidación/limpieza, zonas,
+   indicadores, alertas, perfiles por símbolo/timeframe, filtro de sesiones, banderas SIG FUERTE para backtest,
+   modo de panel Mobile/Predictor, RSI, fuerza/dirección de tendencia y predictor con probabilidad).
 
 ## Qué está verificado y qué no
 
@@ -138,4 +163,3 @@ Editor y pulsar *Guardar*. Tampoco se ha probado con una cuenta Premium.
   volumen bid/ask real.
 - En símbolos sin volumen real (muchos forex/CFD) el volumen es de ticks: el panel lo indica como
   `TICK VOL` y el delta pierde significado direccional.
-- No es asesoramiento financiero.
