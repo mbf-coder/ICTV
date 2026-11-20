@@ -120,7 +120,7 @@ delta for shorts) · quantum score (`≥ +55` / `≤ −55`, same 25/20/15/25/15
 bash verify/verify_all.sh   # exit 0 = everything passes
 ```
 
-Five steps (step 0 assembles the three large files from parts, gated by sha256):
+Five steps (step 0 assembles the four large files from parts, gated by sha256):
 
 1. **AST parse** with `pynescript` (real Pine grammar) — indicator and strategy.
 2. **Static v6 lint** — every call checked against **475 signatures** from the
@@ -172,7 +172,7 @@ the same engine output:
 ## Preview (`preview/index.html`)
 
 Static visual reviewer of the Order Block life-cycle
-(virgin → touched → mitigated →_invalidated + auto-cleanup) with KPIs, a canvas
+(virgin → touched → mitigated → invalidated + auto-cleanup) with KPIs, a canvas
 simulation and a mapping of where each state appears on the chart, panel and
 data window.
 
