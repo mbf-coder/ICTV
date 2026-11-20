@@ -163,3 +163,4 @@ Editor y pulsar *Guardar*. Tampoco se ha probado con una cuenta Premium.
   volumen bid/ask real.
 - En símbolos sin volumen real (muchos forex/CFD) el volumen es de ticks: el panel lo indica como
   `TICK VOL` y el delta pierde significado direccional.
+- No es asesoramiento financiero.
