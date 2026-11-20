@@ -1,0 +1,164 @@
+color  cvdCol    = cvdSlopePct > 2.0 ? cBull : cvdSlopePct < -2.0 ? cBear : cNeut
+bool   buyersInControl = controlPct >= 50.0
+string ctrlTxt   = buyersInControl ? "COMPRADORES" : "VENDEDORES"
+color  ctrlCol   = buyersInControl ? cBull : cBear
+string absorbTxt = bullAbsorb ? "Compradores absorben venta (soporte activo)" : bearAbsorb ? "Vendedores absorben compra (resistencia activa)" : "Sin absorción relevante"
+color  absorbCol = bullAbsorb ? cBull : bearAbsorb ? cBear : cMuted
+string adxState  = adxVal >= effAdxStr ? "MUY FUERTE" : adxVal >= effAdxMin ? "FUERTE" : "DÉBIL / RANGO"
+color  adxCol    = adxVal >= adxStrong ? cBull : adxVal >= adxMin ? cWarn : cNeut
+string momState  = momVal > atrVal * 0.1 ? "ALCISTA" : momVal < -atrVal * 0.1 ? "BAJISTA" : "NEUTRO"
+color  momCol    = momVal > atrVal * 0.1 ? cBull : momVal < -atrVal * 0.1 ? cBear : cNeut
+string emaState  = (ema1 > ema2 and ema2 > ema3 and ema3 > ema4) ? "ALINEADAS ↑" : (ema1 < ema2 and ema2 < ema3 and ema3 < ema4) ? "ALINEADAS ↓" : "MIXTAS"
+color  emaCol    = (ema1 > ema2 and ema2 > ema3 and ema3 > ema4) ? cBull : (ema1 < ema2 and ema2 < ema3 and ema3 < ema4) ? cBear : cNeut
+string structTxt = structure == 1 ? "BOS alcista" : structure == -1 ? "BOS bajista" : "Sin ruptura"
+color  structCol = structure == 1 ? cBull : structure == -1 ? cBear : cNeut
+string zoneTxt   = inBullOB ? "Order Block ALCISTA" + obBullSuf + " (" + obStateTxt + ")" : inBearOB ? "Order Block BAJISTA" + obBearSuf + " (" + obStateTxt + ")" : inBullFVG ? "FVG alcista · OB " + obStateTxt : inBearFVG ? "FVG bajista · OB " + obStateTxt : discount ? "Discount (" + str.tostring(rangePos, "#") + "%) · OB " + obStateTxt : premium ? "Premium (" + str.tostring(rangePos, "#") + "%) · OB " + obStateTxt : "Fuera de zona · OB " + obStateTxt
+color  zoneCol   = (inBullOB or inBullFVG) ? cBull : (inBearOB or inBearFVG) ? cBear : cMuted
+string locTxt    = discount ? "DISCOUNT" : premium ? "PREMIUM" : "EQUILIBRIO"
+color  locCol    = discount ? cBull : premium ? cBear : cNeut
+string vwapState = close > vwapVal ? "ENCIMA" : "DEBAJO"
+color  vwapCol   = close > vwapVal ? cBull : cBear
+string vpState   = na(pocPrice) ? "—" : str.tostring(pocPrice, format.mintick) + " / " + str.tostring(vahPrice, format.mintick) + " / " + str.tostring(valPrice, format.mintick)
+string volTypeTxt = syminfo.volumetype == "base" ? "VOL REAL" : syminfo.volumetype == "quote" ? "VOL QUOTE" : "TICK VOL"
+color  volTypeCol = syminfo.volumetype == "tick" ? cWarn : cText
+string atrRegime = atrVal > atrMA * 1.2 ? "EXPANSIÓN" : atrVal < atrMA * 0.8 ? "COMPRESIÓN" : "ESTABLE"
+color  atrCol    = atrRegime == "EXPANSIÓN" ? cWarn : atrRegime == "COMPRESIÓN" ? cNeut : cText
+string quality   = confidence >= 80.0 and relVol >= 1.0 ? "ALTA" : confidence >= 60.0 ? "MEDIA" : "BAJA"
+color  qualCol   = quality == "ALTA" ? cBull : quality == "MEDIA" ? cWarn : cBear
+string biasTxt   = score >= effSoftTh ? "VENTAJA COMPRADORA" : score <= -effSoftTh ? "VENTAJA VENDEDORA" : "SIN VENTAJA"
+float barChange  = open > 0 ? (close - open) / open * 100.0 : 0.0
+string clockTxt  = str.format_time(time, "dd/MM HH:mm", syminfo.timezone)
+string sessTxt   = not useSess ? "FILTRO OFF" : inLondon and inNY ? "LONDRES + NUEVA YORK" : inLondon ? "LONDRES" : inNY ? "NUEVA YORK" : "FUERA DE SESIÓN ×" + str.tostring(sessPenalty, "#.##")
+color  sessCol   = not useSess ? cMuted : inKill ? cBull : cWarn
+string sessDetail = not useSess ? "score sin atenuar" : inKill ? "killzone activa · score ×1" : "score ×" + str.tostring(sessPenalty, "#.##") + " · FUERTE bloqueado" + (sessBlockStrong ? "" : " (permitido)")
+
+var bool dashInit = false
+
+if showDash and barstate.islast
+    if not dashInit
+        table.merge_cells(dash, 0, 0, 3, 0)
+        table.merge_cells(dash, 0, 3, 3, 3)
+        table.merge_cells(dash, 1, 8, 3, 8)
+        table.merge_cells(dash, 0, 9, 3, 9)
+        table.merge_cells(dash, 0, 14, 3, 14)
+        table.merge_cells(dash, 1, 15, 3, 15)
+        table.merge_cells(dash, 1, 18, 3, 18)
+        table.merge_cells(dash, 0, 19, 3, 19)
+        table.merge_cells(dash, 0, 23, 3, 23)
+        table.merge_cells(dash, 0, 26, 3, 26)
+        table.merge_cells(dash, 0, 27, 3, 27)
+        table.merge_cells(dash, 0, 28, 3, 28)
+        dashInit := true
+
+    // 0 · cabecera
+    fCell(dash, 0, 0, "⚛ QUANTUM FLOW ANALYZER · v6 │ " + profKey, cText, cHead, szDL, text.align_center)
+    // 1 · activo
+    fCell(dash, 0, 1, "ACTIVO",  cMuted, cBg, szD, text.align_left)
+    fCell(dash, 1, 1, syminfo.ticker, cText, cBg, szD, text.align_left)
+    fCell(dash, 2, 1, timeframe.period, cText, cBg, szD, text.align_left)
+    fCell(dash, 3, 1, volTypeTxt, volTypeCol, cBg, szD, text.align_right)
+    // 2 · precio
+    fCell(dash, 0, 2, "PRECIO", cMuted, cBgAlt, szD, text.align_left)
+    fCell(dash, 1, 2, fPx(close), cText, cBgAlt, szD, text.align_left)
+    fCell(dash, 2, 2, fSig2(barChange) + "%", barChange >= 0 ? cBull : cBear, cBgAlt, szD, text.align_left)
+    fCell(dash, 3, 2, clockTxt, cMuted, cBgAlt, szD, text.align_right)
+    // 3 · sección
+    fCell(dash, 0, 3, "▌ VOLUMEN & ORDERFLOW", cText, cHead, szDL, text.align_left)
+    // 4 · volumen
+    fCell(dash, 0, 4, "Volumen", cMuted, cBg, szD, text.align_left)
+    fCell(dash, 1, 4, fVol(volume), cText, cBg, szD, text.align_left)
+    fCell(dash, 2, 4, str.tostring(relVol, "#.##") + "x media", cMuted, cBg, szD, text.align_left)
+    fCell(dash, 3, 4, volState, volCol, cBg, szD, text.align_right)
+    // 5 · delta
+    fCell(dash, 0, 5, "Delta vela", cMuted, cBgAlt, szD, text.align_left)
+    fCell(dash, 1, 5, fSigV(deltaVal), deltaCol, cBgAlt, szD, text.align_left)
+    fCell(dash, 2, 5, fSig1(deltaPct) + "%", deltaCol, cBgAlt, szD, text.align_left)
+    fCell(dash, 3, 5, deltaState, deltaCol, cBgAlt, szD, text.align_right)
+    // 6 · CVD
+    fCell(dash, 0, 6, "CVD sesión", cMuted, cBg, szD, text.align_left)
+    fCell(dash, 1, 6, fVol(cvd), cvdCol, cBg, szD, text.align_left)
+    fCell(dash, 2, 6, fSig1(cvdSlopePct) + "%", cvdCol, cBg, szD, text.align_left)
+    fCell(dash, 3, 6, cvdState, cvdCol, cBg, szD, text.align_right)
+    // 7 · control
+    fCell(dash, 0, 7, "Control", cMuted, cBgAlt, szD, text.align_left)
+    fCell(dash, 1, 7, ctrlTxt, ctrlCol, cBgAlt, szD, text.align_left)
+    fCell(dash, 2, 7, fBar((controlPct - 50.0) * 2.0, 8), ctrlCol, cBgAlt, szD, text.align_left)
+    fCell(dash, 3, 7, str.tostring(controlPct, "#.#") + "%", ctrlCol, cBgAlt, szD, text.align_right)
+    // 8 · absorción
+    fCell(dash, 0, 8, "Absorción", cMuted, cBg, szD, text.align_left)
+    fCell(dash, 1, 8, absorbTxt, absorbCol, cBg, szD, text.align_left)
+    // 9 · sección
+    fCell(dash, 0, 9, "▌ TENDENCIA & MOMENTUM", cText, cHead, szDL, text.align_left)
+    // 10 · ADX
+    fCell(dash, 0, 10, "ADX", cMuted, cBg, szD, text.align_left)
+    fCell(dash, 1, 10, str.tostring(adxVal, "#.#"), adxCol, cBg, szD, text.align_left)
+    fCell(dash, 2, 10, "+" + str.tostring(diP, "#.#") + " / -" + str.tostring(diM, "#.#"), cMuted, cBg, szD, text.align_left)
+    fCell(dash, 3, 10, adxState, adxCol, cBg, szD, text.align_right)
+    // 11 · momentum
+    fCell(dash, 0, 11, "Momentum", cMuted, cBgAlt, szD, text.align_left)
+    fCell(dash, 1, 11, fPx(momVal), momCol, cBgAlt, szD, text.align_left)
+    fCell(dash, 2, 11, fSig2(rocVal) + "%", momCol, cBgAlt, szD, text.align_left)
+    fCell(dash, 3, 11, momState, momCol, cBgAlt, szD, text.align_right)
+    // 12 · EMAs
+    fCell(dash, 0, 12, "EMAs", cMuted, cBg, szD, text.align_left)
+    fCell(dash, 1, 12, str.tostring(lenE1) + "/" + str.tostring(lenE2) + "/" + str.tostring(lenE3) + "/" + str.tostring(lenE4), cText, cBg, szD, text.align_left)
+    fCell(dash, 2, 12, "Precio vs EMA" + str.tostring(lenE4) + ": " + fSig2(close > 0 ? (close - ema4) / close * 100.0 : 0.0) + "%", cMuted, cBg, szD, text.align_left)
+    fCell(dash, 3, 12, emaState, emaCol, cBg, szD, text.align_right)
+    // 13 · estructura
+    fCell(dash, 0, 13, "Estructura", cMuted, cBgAlt, szD, text.align_left)
+    fCell(dash, 1, 13, structTxt, structCol, cBgAlt, szD, text.align_left)
+    fCell(dash, 2, 13, "Swings " + str.tostring(pivLen), cMuted, cBgAlt, szD, text.align_left)
+    fCell(dash, 3, 13, structure == 1 ? "ALZA" : structure == -1 ? "BAJA" : "RANGO", structCol, cBgAlt, szD, text.align_right)
+    // 14 · sección
+    fCell(dash, 0, 14, "▌ ZONAS & SMC", cText, cHead, szDL, text.align_left)
+    // 15 · zona actual
+    fCell(dash, 0, 15, "Zona", cMuted, cBg, szD, text.align_left)
+    fCell(dash, 1, 15, zoneTxt, zoneCol, cBg, szD, text.align_left)
+    // 16 · ubicación rango
+    fCell(dash, 0, 16, "Rango", cMuted, cBgAlt, szD, text.align_left)
+    fCell(dash, 1, 16, locTxt, locCol, cBgAlt, szD, text.align_left)
+    fCell(dash, 2, 16, str.tostring(rangePos, "#") + "%", cMuted, cBgAlt, szD, text.align_left)
+    fCell(dash, 3, 16, "EQ 50%", cNeut, cBgAlt, szD, text.align_right)
+    // 17 · VWAP
+    fCell(dash, 0, 17, "VWAP", cMuted, cBg, szD, text.align_left)
+    fCell(dash, 1, 17, fPx(vwapVal), cText, cBg, szD, text.align_left)
+    fCell(dash, 2, 17, fSig2(vwapDist) + "%", vwapCol, cBg, szD, text.align_left)
+    fCell(dash, 3, 17, vwapState, vwapCol, cBg, szD, text.align_right)
+    // 18 · POC / VAH / VAL
+    fCell(dash, 0, 18, "POC/VAH/VAL", cMuted, cBgAlt, szD, text.align_left)
+    fCell(dash, 1, 18, vpState, cWarn, cBgAlt, szD, text.align_left)
+    // 19 · sección
+    fCell(dash, 0, 19, "▌ VOLATILIDAD & RIESGO", cText, cHead, szDL, text.align_left)
+    // 20 · ATR
+    fCell(dash, 0, 20, "ATR", cMuted, cBg, szD, text.align_left)
+    fCell(dash, 1, 20, fPx(atrVal), cText, cBg, szD, text.align_left)
+    fCell(dash, 2, 20, str.tostring(atrPct, "#.##") + "% del precio", cMuted, cBg, szD, text.align_left)
+    fCell(dash, 3, 20, atrRegime, atrCol, cBg, szD, text.align_right)
+    // 21 · stops ATR
+    fCell(dash, 0, 21, "Stop 1.5 ATR", cMuted, cBgAlt, szD, text.align_left)
+    fCell(dash, 1, 21, fPx(close - atrVal * 1.5), cBull, cBgAlt, szD, text.align_left)
+    fCell(dash, 2, 21, fPx(close + atrVal * 1.5), cBear, cBgAlt, szD, text.align_left)
+    fCell(dash, 3, 21, "long / short", cMuted, cBgAlt, szD, text.align_right)
+    // 22 · calidad
+    fCell(dash, 0, 22, "Calidad", cMuted, cBg, szD, text.align_left)
+    fCell(dash, 1, 22, str.tostring(confidence, "#") + "% confluencia", cText, cBg, szD, text.align_left)
+    fCell(dash, 2, 22, str.tostring(aligned) + "/5 factores", cMuted, cBg, szD, text.align_left)
+    fCell(dash, 3, 22, quality, qualCol, cBg, szD, text.align_right)
+    // 23 · sección
+    fCell(dash, 0, 23, "▌ DECISIÓN CUÁNTICA", cText, cHead, szDL, text.align_left)
+    // 24 · sesión Londres / NY
+    fCell(dash, 0, 24, "Sesión LON/NY", cMuted, cBg, szD, text.align_left)
+    fCell(dash, 1, 24, sessTxt, sessCol, cBg, szD, text.align_left)
+    fCell(dash, 2, 24, sessDetail, cMuted, cBg, szD, text.align_left)
+    fCell(dash, 3, 24, inKill ? "EN SESIÓN" : "ATENÚA", sessCol, cBg, szD, text.align_right)
+    // 25 · score (ya atenuado fuera de sesión)
+    fCell(dash, 0, 25, "Score", cMuted, cBgAlt, szD, text.align_left)
+    fCell(dash, 1, 25, fSig0(score) + " / 100", score >= 0 ? cBull : cBear, cBgAlt, szD, text.align_left)
+    fCell(dash, 2, 25, fBar(score, 10), score >= 0 ? cBull : cBear, cBgAlt, szD, text.align_left)
+    fCell(dash, 3, 25, biasTxt, score >= effSoftTh ? cBull : score <= -effSoftTh ? cBear : cNeut, cBgAlt, szD, text.align_right)
+    // 26 · decisión
+    fCell(dash, 0, 26, decision, color.white, decCol, szDL, text.align_center)
+    // 27 · motivo
+    fCell(dash, 0, 27, zoneTxt + " · " + ctrlTxt + " " + str.tostring(controlPct, "#") + "% · ADX " + str.tostring(adxVal, "#") + " · " + momState + " · " + sessTxt + " · " + obLastEvent, cMuted, cBgAlt, szD, text.align_center)
+    // 28 · pie
+    fCell(dash, 0, 28, "Delta/FP estimados por intrabars · No es asesoramiento financiero", cNeut, cBg, szD, text.align_center)
