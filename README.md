@@ -67,6 +67,33 @@ for 6.7" screens), `Predictor` (motive/footer lead with the forecast).
 **Alerts:** 4 `alertcondition()` (strong buy/sell in zone, buy/sell in zone) +
 exported `SIG FUERTE COMPRA/VENTA` flags used by the backtest.
 
+## Backtest — scenario 12 (STRONG signals + predictor hit-rate)
+
+Scenario 12 of `verify_runtime.mjs` runs two backtests over the same engine
+output, both post-warmup (bar index ≥ 200; NaN/exact-zero forecasts excluded):
+
+- **STRONG signals (H=10):** entry at the signal bar close, exit 10 bars later;
+  reports count, win-rate (total + buy/sell split), mean MFE/MAE and mean net
+  return.
+- **Predictor directional hit-rate (HP=5 = `predHorizon` default):**
+  `predMove` is not exported as a plot, but it is exactly recoverable as
+  `Precio predicho − close` (the Pine defines `predPrice = close + predMove`).
+  A forecast scores a hit when `sign(predMove) == sign(close[i+5] − close[i])`;
+  reports evaluable count, hit-rate and the up/down split.
+- **12a synthetic (600 deterministic bars, always runs)** and **12b real
+  (Binance BTCUSDT 15m, N=500)**. The real leg is gated by a preflight probe:
+  without network it prints `SKIP` and passes. If the live window carries no
+  STRONG signals (market-dependent), that is reported, not failed — what is
+  verified is the integrity of the computation.
+
+Latest measured values (2026-11-20; the synthetic leg is deterministic, the
+real leg depends on the live window and will vary run to run):
+
+| Leg | STRONG (H=10) | Predictor hit-rate (HP=5) |
+|---|---|---|
+| Synthetic | n=31 (B=12 S=19), wr=70.97 %, MFE=2.56 %, MAE=0.72 %, net=1.71 % | n=395, hr=85.06 % (up=86.86 % n=236, dn=82.39 % n=159) |
+| BTCUSDT 15m | n=5 (B=1 S=4), wr=80.00 %, MFE=1.49 %, MAE=0.49 %, net=0.45 % | n=295, hr=50.17 % (up=43.75 % n=128, dn=55.09 % n=167) |
+
 ## Verification suite
 
 ```bash
@@ -83,14 +110,16 @@ Five steps (step 0 assembles the three large files from parts, gated by sha256):
    budget (<80 % of limits), all 5 profiles on synthetic + real data, 2 with
    real Binance data (BTCUSDT 15m), London/NY sessions, OB life-cycle, 3 panel
    modes, and a minimum backtest of STRONG signals (count, H=10 win-rate,
-   MFE/MAE; synthetic deterministic + BTCUSDT 15m N=500, SKIP without network).
+   MFE/MAE; synthetic deterministic + BTCUSDT 15m N=500, SKIP without network)
+   plus the predictor directional hit-rate (sign of `predMove` vs the real
+   H=5 return, synthetic + BTCUSDT 15m N=500, SKIP without network).
 5. **Mission checklist** — **45 requirements** (panel, decision, footprint, OB
    touch/mitigation/invalidation/cleanup, zones, indicators, alerts, profiles,
    sessions, backtest flags, Mobile/Predictor, RSI, trend strength/direction,
    predictor with probability).
 
-Pinned tools: `pynescript==0.3.0`, `pinets@0.13.1`. Last verified state:
-**runtime 206/206 assertions, features 45/45, exit 0.**
+Pinned tools: `pynescript==0.3.0`, `pinets@0.13.1`. Last verified state
+(2026-11-20): **runtime 215/215 assertions, features 45/45, exit 0.**
 CI (`.github/workflows/verify.yml`) runs the same suite on every push/PR,
 publishes the summary and the `verify-report` log artifact, and commits the
 assembled files with `[skip ci]`.
