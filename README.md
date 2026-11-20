@@ -16,7 +16,8 @@ quantum traders and institutional traders.
 | Path | What it is |
 |---|---|
 | `quant-flow/QuantumFlowAnalyzer_v6.pine` | The deliverable indicator (single script, no external libraries). **1036 lines, ~64.7 KB**, assembled from `quant-flow/src/qfa.01`–`qfa.06`. |
-| `quant-flow/src/qfa.*` | Versioned parts of the indicator (files >10 KB live as parts). |
+| `quant-flow/QuantumFlowStrategy_v6.pine` | Backtestable strategy on the same reading (volume impulse + ADX + dominance). **186 lines, ~13.7 KB**, assembled from `quant-flow/src/qfs.01`–`qfs.02`. |
+| `quant-flow/src/qfa.*` + `qfs.*` | Versioned parts of the indicator and the strategy (files >10 KB live as parts). |
 | `quant-flow/README.md` | Indicator manual (settings groups, profiles, panel modes, predictor). |
 | `verify/` | Reproducible verification suite (`verify_all.sh` + parser, lint, runtime, checklist). |
 | `verify/parts/` | Versioned parts of the two other large files (`lint.*`, `rt.*`). |
@@ -45,7 +46,7 @@ than the chart's) and group `7 · Footprint`.
 | Cripto intradía | 55 / 25 | 18 / 28 | 25 / 20 / 15 / 25 / 15 | 0.35 / 2.5 / 1.6 | 1.5x |
 | Cripto swing | 60 / 30 | 20 / 30 | 30 / 20 / 15 / 20 / 15 | 0.35 / 2.5 / 1.6 | 1.8x |
 | Forex / ticks | 50 / 25 | 22 / 32 | 30 / 25 / 20 / 10 / 15 | 0.25 / 1.5 / 1.0 | 1.3x |
-| Acciones e índices | 60 / 30 | 22 / 35 | 30 / 20 / 15 / 20 / 15 | 0.30 / 2.0 / 1.4 | 1.6x |
+| Acciones e índices | 60 / 30 | 22 / 35 | 30 / 30 / 15 / 20 / 15 | 0.30 / 2.0 / 1.4 | 1.6x |
 
 **Panel:** 29 rows × 4 columns (12 merged cells), 5 sections
 (Volumen & Orderflow · Tendencia & Momentum · Zonas & SMC ·
@@ -94,6 +95,25 @@ real leg depends on the live window and will vary run to run):
 | Synthetic | n=31 (B=12 S=19), wr=70.97 %, MFE=2.56 %, MAE=0.72 %, net=1.71 % | n=395, hr=85.06 % (up=86.86 % n=236, dn=82.39 % n=159) |
 | BTCUSDT 15m | n=5 (B=1 S=4), wr=80.00 %, MFE=1.49 %, MAE=0.49 %, net=0.45 % | n=295, hr=50.17 % (up=43.75 % n=128, dn=55.09 % n=167) |
 
+## Strategy (TradingView)
+
+**Install:** TradingView → **Pine Editor** → paste `quant-flow/QuantumFlowStrategy_v6.pine` →
+**Save** → **Add to chart** → open the **Strategy Tester** tab. Same reading as the
+indicator, proxied on OHLC (no intrabar plan needed):
+
+- **Entries (all four must agree):** volume impulse (`relVol ≥ 1.5×` + candle range
+  `≥ 0.7× ATR`) · ADX strength (`≥ 18`, rising, `+DI/−DI` gap `≥ 5`) · buyers/sellers
+  dominance (`control ≥ 55 %` with positive delta for longs, `≤ 45 %` with negative
+delta for shorts) · quantum score (`≥ +55` / `≤ −55`, same 25/20/15/25/15 weights) ·
+  inside the London/NY killzone and the backtest date window.
+- **Exits that protect winners:** ATR stop (1.5×) + take-profit (3.0×), trailing after
+  +1.5× ATR (1.0× distance), close on opposite signal, on killzone exit, after N bars
+  or at the end of the date window.
+- **Account risk:** 25 % equity per trade, 0.05 % commission, 2-tick slippage,
+  no pyramiding, max 20 % drawdown + max 5 % intraday loss (all inputs).
+- Long/short triangles on the chart, score/ADX/control/impulse in the data window,
+  `alertcondition()` on both entries.
+
 ## Verification suite
 
 ```bash
@@ -102,9 +122,10 @@ bash verify/verify_all.sh   # exit 0 = everything passes
 
 Five steps (step 0 assembles the three large files from parts, gated by sha256):
 
-1. **AST parse** with `pynescript` (real Pine grammar).
+1. **AST parse** with `pynescript` (real Pine grammar) — indicator and strategy.
 2. **Static v6 lint** — every call checked against **475 signatures** from the
-   official reference (params, arity, enum values) plus v6 migration/type rules.
+   official reference (params, arity, enum values) plus v6 migration/type rules
+   (indicator: 374 calls; strategy: 98 calls, including `strategy.*`).
 3. **Lint self-test** — 18 injected defects, all must be detected.
 4. **Runtime with PineTS** — **13 scenarios**: 5 on 600 synthetic bars, TV object
    budget (<80 % of limits), all 5 profiles on synthetic + real data, 2 with
@@ -113,10 +134,10 @@ Five steps (step 0 assembles the three large files from parts, gated by sha256):
    MFE/MAE; synthetic deterministic + BTCUSDT 15m N=500, SKIP without network)
    plus the predictor directional hit-rate (sign of `predMove` vs the real
    H=5 return, synthetic + BTCUSDT 15m N=500, SKIP without network).
-5. **Mission checklist** — **45 requirements** (panel, decision, footprint, OB
+5. **Mission checklists** — **45 requirements** for the indicator (panel, decision, footprint, OB
    touch/mitigation/invalidation/cleanup, zones, indicators, alerts, profiles,
    sessions, backtest flags, Mobile/Predictor, RSI, trend strength/direction,
-   predictor with probability).
+   predictor with probability) plus **23 requirements** for the strategy.
 
 Pinned tools: `pynescript==0.3.0`, `pinets@0.13.1`. Last verified state
 (2026-11-20): **runtime 215/215 assertions, features 45/45, exit 0.**
