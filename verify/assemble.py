@@ -23,11 +23,14 @@ TARGETS = [
     ("verify/verify_runtime.mjs",
      ["verify/parts/rt.01", "verify/parts/rt.02", "verify/parts/rt.03",
            "verify/parts/rt.04", "verify/parts/rt.05"],
-      "33b2eff61fac1db1f4b8ae8c5fbcefe10690fa1df700f9e26e6c037116a497b3"),
+     "33b2eff61fac1db1f4b8ae8c5fbcefe10690fa1df700f9e26e6c037116a497b3"),
     ("quant-flow/QuantumFlowAnalyzer_v6.pine",
      ["quant-flow/src/qfa.01", "quant-flow/src/qfa.02", "quant-flow/src/qfa.03",
       "quant-flow/src/qfa.04", "quant-flow/src/qfa.05", "quant-flow/src/qfa.06"],
      "54d5e1f21343e2a1d7d63c34f43b90122348ac05fb084e7b37cc5955df04a349"),
+    ("quant-flow/QuantumFlowStrategy_v6.pine",
+     ["quant-flow/src/qfs.01", "quant-flow/src/qfs.02"],
+     "09badb68aa4eb90abe5658e139a0654679b28450c089e0537381d90b94c3008f"),
 ]
 
 
