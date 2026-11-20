@@ -647,6 +647,8 @@ console.log('\n═══ ESCENARIO 11 · ciclo de vida del OB ═══');
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ESCENARIO 12 · backtest mínimo de señales FUERTE (nº, win-rate a H, MFE/MAE)
+// + hit-rate direccional del predictor (signo de predMove = predPrice - close
+// vs signo del retorno real a HP=5 barras, valor por defecto de predHorizon)
 // 12a sintético (determinista, siempre corre): las banderas SIG FUERTE COMPRA/
 // VENTA son series completas y deben dar ≥1 señal con métricas coherentes.
 // 12b real (Binance BTCUSDT 15m, N=500): mide lo mismo sobre mercado real;
@@ -660,6 +662,7 @@ console.log('\n═══ ESCENARIO 11 · ciclo de vida del OB ═══');
 console.log('\n═══ ESCENARIO 12 · backtest FUERTE ═══');
 {
     const H = 10;
+    const HP = 5;
     const WARM = 200;
     function backtest(closes, highs, lows, buys, sells, h, from) {
         const t = { nBuy: 0, nSell: 0, wBuy: 0, wSell: 0, mfe: [], mae: [], net: [] };
@@ -704,6 +707,29 @@ console.log('\n═══ ESCENARIO 12 · backtest FUERTE ═══');
     function fmtPct(v, d = 2) {
         return Number.isFinite(v) ? v.toFixed(d) + '%' : 'n/a';
     }
+    // Hit-rate direccional del predictor: signo(predMove) vs signo del retorno
+    // real a HP barras. predMove no se exporta como plot, pero es exacto vía
+    // predPrice - close (el Pine define predPrice = close + predMove). HP = 5
+    // coincide con el valor por defecto de predHorizon. Se omiten barras con
+    // predMove o retorno nulos/NaN (empates exactos a 0 no puntúan).
+    function predHitRate(closes, predPrices, h, from) {
+        let n = 0, hits = 0, nUp = 0, hUp = 0, nDn = 0, hDn = 0;
+        const nb = closes.length;
+        for (let i = from; i + h < nb; i++) {
+            const px = predPrices[i], entry = closes[i], exit = closes[i + h];
+            if (!Number.isFinite(px) || !Number.isFinite(entry) || !Number.isFinite(exit)) continue;
+            if (entry <= 0) continue;
+            const pm = px - entry;
+            if (!Number.isFinite(pm) || pm === 0) continue;
+            const act = exit - entry;
+            if (act === 0) continue;
+            n++;
+            const hit = Math.sign(pm) === Math.sign(act);
+            if (hit) hits++;
+            if (pm > 0) { nUp++; if (hit) hUp++; } else { nDn++; if (hit) hDn++; }
+        }
+        return { n, hits, hr: n ? hits / n : NaN, nUp, hrUp: nUp ? hUp / nUp : NaN, nDn, hrDn: nDn ? hDn / nDn : NaN };
+    }
     // 12a · sintético determinista
     {
         const pine = new PineTS(BARS, 'TESTUSD', '1h', BARS.length);
@@ -726,6 +752,15 @@ console.log('\n═══ ESCENARIO 12 · backtest FUERTE ═══');
         check('MFE/MAE medios ≥ 0', r.mfeAvg >= 0 && r.maeAvg >= 0, `MFE=${fmtPct(r.mfeAvg)} MAE=${fmtPct(r.maeAvg)}`);
         check('retorno medio finito', Number.isFinite(r.netAvg), `net=${fmtPct(r.netAvg)}`);
         console.log(`  info  sintético: n=${r.n} (C=${r.nBuy} V=${r.nSell}) wr=${fmtPct(r.wr * 100)} wrC=${fmtPct(r.wrBuy * 100)} wrV=${fmtPct(r.wrSell * 100)} MFE=${fmtPct(r.mfeAvg)} MAE=${fmtPct(r.maeAvg)} net=${fmtPct(r.netAvg)}`);
+        // 12a-bis · hit-rate direccional del predictor en sintético (HP=5)
+        check('predictor sintético: plot Precio predicho presente', 'Precio predicho' in p);
+        const predPx = seriesValues(p['Precio predicho']);
+        check('predictor sintético: serie alineada con el close', predPx.length === closes.length, `series=${predPx.length}/${closes.length}`);
+        const ph = predHitRate(closes, predPx, HP, WARM);
+        check('predictor sintético: ≥1 pronóstico evaluable post-warmup', ph.n >= 1, `n=${ph.n}`);
+        check('predictor sintético: hit-rate en [0,1]', ph.n >= 1 && ph.hr >= 0 && ph.hr <= 1, `hr=${fmtPct(ph.hr * 100)}`);
+        check('predictor sintético: desglose up/down consistente (n=nUp+nDn)', ph.n === ph.nUp + ph.nDn, `n=${ph.n} (up=${ph.nUp} dn=${ph.nDn})`);
+        console.log(`  info  predictor sintético HP=${HP}: n=${ph.n} hits=${ph.hits} hr=${fmtPct(ph.hr * 100)} up=${fmtPct(ph.hrUp * 100)} (n=${ph.nUp}) dn=${fmtPct(ph.hrDn * 100)} (n=${ph.nDn})`);
     }
     // 12b · real Binance
     const SYM = 'BTCUSDT', TF = '15m', N = 500;
@@ -762,6 +797,21 @@ console.log('\n═══ ESCENARIO 12 · backtest FUERTE ═══');
                 check('backtest real: retorno medio finito', Number.isFinite(r.netAvg), `net=${fmtPct(r.netAvg)}`);
             }
             console.log(`  info  real ${SYM} ${TF} H=${H}: n=${r.n} (C=${r.nBuy} V=${r.nSell}) wr=${fmtPct(r.wr * 100)} MFE=${fmtPct(r.mfeAvg)} MAE=${fmtPct(r.maeAvg)} net=${fmtPct(r.netAvg)}`);
+            // 12b-bis · hit-rate direccional del predictor en real (HP=5)
+            check('predictor real: plot Precio predicho presente', 'Precio predicho' in p);
+            const predPxR = seriesValues(p['Precio predicho']);
+            check('predictor real: serie alineada con el close', predPxR.length === closes.length,
+                `series=${predPxR.length}/${closes.length}`);
+            const phR = predHitRate(closes, predPxR, HP, WARM);
+            check('predictor real: conteo consistente (n=nUp+nDn)', phR.n === phR.nUp + phR.nDn,
+                `n=${phR.n} (up=${phR.nUp} dn=${phR.nDn})`);
+            if (phR.n === 0) {
+                console.log('  info  predictor real sin pronósticos evaluables post-warmup — no es un fallo');
+            } else {
+                check('predictor real: hit-rate en [0,1]', phR.hr >= 0 && phR.hr <= 1,
+                    `hr=${fmtPct(phR.hr * 100)} (up=${fmtPct(phR.hrUp * 100)} dn=${fmtPct(phR.hrDn * 100)})`);
+            }
+            console.log(`  info  predictor real ${SYM} ${TF} HP=${HP}: n=${phR.n} hits=${phR.hits} hr=${fmtPct(phR.hr * 100)} up=${fmtPct(phR.hrUp * 100)} (n=${phR.nUp}) dn=${fmtPct(phR.hrDn * 100)} (n=${phR.nDn})`);
             console.log(`  info  ejecución total del escenario: ${Date.now() - t0} ms`);
         } catch (e) {
             failures++;
