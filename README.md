@@ -45,7 +45,7 @@ than the chart's) and group `7 · Footprint`.
 | Cripto intradía | 55 / 25 | 18 / 28 | 25 / 20 / 15 / 25 / 15 | 0.35 / 2.5 / 1.6 | 1.5x |
 | Cripto swing | 60 / 30 | 20 / 30 | 30 / 20 / 15 / 20 / 15 | 0.35 / 2.5 / 1.6 | 1.8x |
 | Forex / ticks | 50 / 25 | 22 / 32 | 30 / 25 / 20 / 10 / 15 | 0.25 / 1.5 / 1.0 | 1.3x |
-| Acciones e índices | 60 / 30 | 22 / 35 | 30 / 30 / 15 / 20 / 15 | 0.30 / 2.0 / 1.4 | 1.6x |
+| Acciones e índices | 60 / 30 | 22 / 35 | 30 / 20 / 15 / 20 / 15 | 0.30 / 2.0 / 1.4 | 1.6x |
 
 **Panel:** 29 rows × 4 columns (12 merged cells), 5 sections
 (Volumen & Orderflow · Tendencia & Momentum · Zonas & SMC ·
@@ -120,7 +120,7 @@ Five steps (step 0 assembles the three large files from parts, gated by sha256):
 
 Pinned tools: `pynescript==0.3.0`, `pinets@0.13.1`. Last verified state
 (2026-11-20): **runtime 215/215 assertions, features 45/45, exit 0.**
-CI (`.github/workflows/verify.yml`) runs the same suite on every push and PR,
+CI (`.github/workflows/verify.yml`) runs the same suite on every push/PR,
 publishes the summary and the `verify-report` log artifact, and commits the
 assembled files with `[skip ci]`.
 
