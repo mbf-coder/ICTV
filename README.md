@@ -46,7 +46,7 @@ than the chart's) and group `7 · Footprint`.
 | Cripto intradía | 55 / 25 | 18 / 28 | 25 / 20 / 15 / 25 / 15 | 0.35 / 2.5 / 1.6 | 1.5x |
 | Cripto swing | 60 / 30 | 20 / 30 | 30 / 20 / 15 / 20 / 15 | 0.35 / 2.5 / 1.6 | 1.8x |
 | Forex / ticks | 50 / 25 | 22 / 32 | 30 / 25 / 20 / 10 / 15 | 0.25 / 1.5 / 1.0 | 1.3x |
-| Acciones e índices | 60 / 30 | 22 / 35 | 30 / 30 / 15 / 20 / 15 | 0.30 / 2.0 / 1.4 | 1.6x |
+| Acciones e índices | 60 / 30 | 22 / 35 | 30 / 20 / 15 / 20 / 15 | 0.30 / 2.0 / 1.4 | 1.6x |
 
 **Panel:** 29 rows × 4 columns (12 merged cells), 5 sections
 (Volumen & Orderflow · Tendencia & Momentum · Zonas & SMC ·
@@ -172,7 +172,7 @@ the same engine output:
 ## Preview (`preview/index.html`)
 
 Static visual reviewer of the Order Block life-cycle
-(virgin → touched → mitigated → invalidated + auto-cleanup) with KPIs, a canvas
+(virgin → touched → mitigated →_invalidated + auto-cleanup) with KPIs, a canvas
 simulation and a mapping of where each state appears on the chart, panel and
 data window.
 
