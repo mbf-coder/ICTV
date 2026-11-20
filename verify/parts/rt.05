@@ -146,6 +146,61 @@ console.log('\n═══ ESCENARIO 12 · backtest FUERTE ═══');
     }
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+// ESCENARIO 13 · mobile 6.7" + predictor (Completo/Mobile/Predictor compilan,
+// panel intacto de 29 filas y series nuevas finitas)
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n═══ ESCENARIO 13 · mobile + predictor ═══');
+{
+    const MODES = ['Completo', 'Mobile', 'Predictor'];
+    const FROM_MODE = 'input.string("Completo", "Modo de panel"';
+    check('input de modo de panel presente', SRC.includes(FROM_MODE));
+    check('input de horizonte de prediccion presente', SRC.includes('Horizonte de prediccion'));
+    for (const m of MODES) {
+        const src = withInputs(SRC, [[FROM_MODE, `input.string("${m}", "Modo de panel"`]]);
+        const pine = new PineTS(BARS, 'TESTUSD', '1h', BARS.length);
+        let ctx = null;
+        try {
+            ctx = await pine.run(src);
+        } catch (e) {
+            failures++;
+            console.log(`  FAIL  modo "${m}" no compila — ${String(e?.message ?? e).slice(0, 200)}`);
+            continue;
+        }
+        checks++;
+        const warns = ctx?.warnings ?? [];
+        if (warns.length === 0) {
+            console.log(`  PASS  modo "${m}" compila sin warnings`);
+        } else {
+            failures++;
+            console.log(`  FAIL  modo "${m}" warnings — ${JSON.stringify(warns).slice(0, 200)}`);
+        }
+        const p = ctx.plots ?? {};
+        for (const n of ['RSI', 'DI spread', 'Fuerza tendencia', 'Precio predicho', 'Prob subida %']) {
+            check(`modo "${m}" · plot "${n}" presente`, n in p);
+        }
+        const tp = lastValue(p['Fuerza tendencia']);
+        const prob = lastValue(p['Prob subida %']);
+        const px = lastValue(p['Precio predicho']);
+        const rsi = lastValue(p['RSI']);
+        check(`modo "${m}" · fuerza en [0,100]`, Number.isFinite(tp) && tp >= 0 && tp <= 100, `fuerza=${tp?.toFixed?.(2)}`);
+        check(`modo "${m}" · prob en [5,95]`, Number.isFinite(prob) && prob >= 5 && prob <= 95, `prob=${prob?.toFixed?.(1)}`);
+        check(`modo "${m}" · RSI en [0,100]`, Number.isFinite(rsi) && rsi >= 0 && rsi <= 100, `rsi=${rsi?.toFixed?.(1)}`);
+        check(`modo "${m}" · precio predicho finito y > 0`, Number.isFinite(px) && px > 0, `pred=${px?.toFixed?.(2)}`);
+        const dash = tablesOf(ctx).find((t) => t.rows === 29);
+        check(`modo "${m}" · panel 29 filas intacto`, !!dash && cellMap(dash).size >= 100, `celdas=${dash ? cellMap(dash).size : 0}`);
+        if (dash) {
+            const cm = cellMap(dash);
+            const head = cm.get('0,0') ?? '';
+            check(`modo "${m}" · cabecera indica el modo`, head.includes(m), head.slice(0, 60));
+            const decision = cm.get('0,26') ?? '';
+            const allowed = ['FUERTE COMPRA', 'FUERTE VENTA', 'COMPRA', 'VENTA', 'ESPERAR', 'ESPERAR · SIN VENTAJA', 'CARGANDO DATOS'];
+            check(`modo "${m}" · decisión válida`, allowed.includes(decision), `decisión="${decision}"`);
+            check(`modo "${m}" · motivo con datos`, (cm.get('0,27') ?? '').length > 10, (cm.get('0,27') ?? '').slice(0, 70));
+        }
+    }
+}
+
 console.log(`\n══════════════════════════════════════════`);
 const skipTxt = skipped ? ` · ${skipped} escenario(s) omitidos (sin red)` : '';
 console.log(`RESUMEN RUNTIME: ${checks - failures}/${checks} aserciones OK${skipTxt}`);
