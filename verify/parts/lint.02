@@ -1,0 +1,214 @@
+                names = [n.strip() for n in m.group(1).split(",")]
+                for n in names:
+                    if re.fullmatch(r"[A-Za-z_]\w*", n):
+                        self.declared.setdefault(n, idx + 1)
+                        self.var_init[n] = ""
+                if "request.security_lower_tf" in rhs:
+                    self.intrabar_arrays.extend(names)
+                continue
+
+            m = decl_typed.match(line)
+            if m:
+                typ, name, rhs = m.group(1), m.group(2), m.group(3)
+                self.declared.setdefault(name, idx + 1)
+                self.var_init[name] = rhs.strip()
+                base = typ.split("<")[0].strip()
+                self.var_type[name] = base
+                self.type_decls.setdefault(name, []).append((idx + 1, indent, base))
+                if typ == "bool":
+                    self.bool_vars.add(name)
+                continue
+
+            m = decl_var.match(line)
+            if m:
+                name, rhs = m.group(1), m.group(2)
+                self.declared.setdefault(name, idx + 1)
+                self.var_init[name] = rhs.strip()
+                if re.search(r"(>=|<=|==|!=|>|<|\band\b|\bor\b|\bnot\b|\btrue\b|\bfalse\b)", rhs):
+                    self.bool_vars.add(name)
+                continue
+
+            m = decl_plain.match(line)
+            if m and indent == 0:
+                name, rhs = m.group(1), m.group(2)
+                self.declared.setdefault(name, idx + 1)
+                self.var_init[name] = rhs.strip()
+                if re.search(r"(>=|<=|==|!=|>|<|\band\b|\bor\b|\bnot\b|\btrue\b|\bfalse\b)", rhs):
+                    self.bool_vars.add(name)
+                continue
+
+            # variables de bucle
+            for fm in re.finditer(r"\bfor\s+([A-Za-z_]\w*)\s*=", line):
+                self.declared.setdefault(fm.group(1), idx + 1)
+            for fm in re.finditer(r"\bfor\s+\[([^\]]+)\]\s+in\b", line):
+                for n in fm.group(1).split(","):
+                    self.declared.setdefault(n.strip(), idx + 1)
+
+    # ── extracción de llamadas ───────────────────────────────────────────────
+    def calls(self):
+        pattern = re.compile(r"(?<![\w.])([A-Za-z_][\w.]*)\s*(?:<[^<>()]*>)?\s*\(")
+        for m in pattern.finditer(self.code):
+            name = m.group(1)
+            if name in ("if", "for", "while", "switch", "and", "or", "not", "in"):
+                continue
+            open_idx = m.end() - 1
+            depth, i = 0, open_idx
+            while i < len(self.code):
+                ch = self.code[i]
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                i += 1
+            if depth != 0:
+                yield name, "", line_of(self.starts, m.start()), True, m.start()
+                continue
+            argtext = self.masked[open_idx + 1:i]
+            after = self.code[i + 1:i + 4]
+            is_def = after.lstrip().startswith("=>")
+            yield name, argtext, line_of(self.starts, m.start()), is_def, m.start()
+
+    # ── resolución de valores enum ───────────────────────────────────────────
+    def resolves_to(self, value, allowed, depth=0):
+        """True si `value` es un valor permitido o una variable cuyo inicializador
+        sólo usa valores permitidos."""
+        value = value.strip()
+        if not value:
+            return False
+        if value in allowed:
+            return True
+        if depth > 3:
+            return False
+        if re.fullmatch(r"[A-Za-z_]\w*", value) and value in self.var_init:
+            init = self.var_init[value]
+            if init:
+                tokens = re.findall(r"[A-Za-z_][\w.]*", init)
+                cand = [t for t in tokens if any(t.startswith(p) for p in ENUM_NAMESPACES)]
+                if cand and all(t in allowed for t in cand):
+                    return True
+                if any(t in allowed for t in tokens):
+                    return all(t in allowed or not any(t.startswith(p) for p in ENUM_NAMESPACES) for t in tokens)
+        return False
+
+    # ── chequeos ─────────────────────────────────────────────────────────────
+    NAMESPACES = {"ta", "math", "str", "array", "box", "line", "label", "table", "color",
+                  "input", "plot", "display", "format", "font", "size", "text", "position",
+                  "request", "strategy", "alert", "chart", "currency", "session", "ticker",
+                  "dayofweek", "extend", "xloc", "yloc", "shape", "location", "scale", "order",
+                  "hline", "linefill", "matrix", "map", "polyline", "runtime", "barmerge",
+                  "adjustment", "backadjustment", "settlement_as_close", "earnings", "dividends",
+                  "splits", "syminfo", "barstate", "timeframe", "plotshape", "hline_style",
+                  "log", "polyline_style", "time"}
+
+    def check_identifiers(self):
+        known = set(self.declared) | set(self.user_funcs) | set(self.functions) | set(CASTS)
+        known |= set(KEYWORDS) | self.NAMESPACES
+        for v in self.ref.get("variables", []) + self.ref.get("constants", []):
+            known.add(v)
+            known.add(v.split(".")[-1])
+        for idx, line in enumerate(self.code.split("\n")):
+            for m in re.finditer(r"(?<![\w.])([A-Za-z_]\w*)(?![\w.])", line):
+                name = m.group(1)
+                if name in known:
+                    continue
+                before = line[max(0, m.start() - 1):m.start()]
+                if before in ('"', "#"):
+                    continue
+                rest = line[m.end():]
+                if re.match(r"\s*=(?!=)", rest):  # clave de argumento nombrado
+                    continue
+                if re.match(r"\s*:=", rest):
+                    continue
+                self.add("W001", idx + 1, f"identificador no declarado: '{name}'", severity="warning")
+
+    def run(self):
+        self.call_count = 0
+        self.check_header()
+        self.check_indentation()
+        self.check_calls()
+        self.check_v6_rules()
+        self.check_structure()
+        self.check_contracts()
+        self.check_identifiers()
+        return self.findings
+
+    def check_header(self):
+        first = self.raw.split("\n", 1)[0].strip()
+        if first != "//@version=6":
+            self.add("S001", 1, f'la primera línea debe ser "//@version=6" (encontrado: {first!r})')
+        decls = re.findall(r"^(indicator|strategy|library)\s*\(", self.raw, re.M)
+        if len(decls) != 1:
+            self.add("S002", 1, f"debe haber exactamente una declaración global indicator/strategy/library (hay {len(decls)})")
+
+    def check_indentation(self):
+        depth = 0
+        prev_code = ""
+        for idx, raw in enumerate(self.masked.split("\n")):
+            code = strip_comment(raw)
+            if not code.strip():
+                continue
+            if depth == 0 and not prev_code.rstrip().endswith(("?", ":", ",", "+", "-", "*", "/", "=", "and", "or")):
+                indent = len(code) - len(code.lstrip(" "))
+                if indent % 4 != 0:
+                    self.add("S003", idx + 1, f"indentación {indent} no es múltiplo de 4")
+            depth += code.count("(") + code.count("[") - code.count(")") - code.count("]")
+            if depth < 0:
+                self.add("S004", idx + 1, "paréntesis/corchetes desbalanceados (cierre de más)")
+                depth = 0
+            prev_code = code
+
+    RECEIVERS = {"table": "table", "box": "box", "label": "label", "line": "line",
+                 "array": "array", "matrix": "matrix", "map": "map"}
+    # primer parámetro que identifica al objeto receptor (no aplica a *.new)
+    OBJ_FIRST = {"table_id", "id", "array_id", "matrix_id", "map_id"}
+
+    def resolve_type(self, ident, line):
+        entries = self.type_decls.get(ident)
+        if not entries:
+            return None
+        before = [e for e in entries if e[0] <= line]
+        if not before:
+            return None
+        before.sort(key=lambda e: (e[0], e[1]))
+        return before[-1][2]
+
+    def check_receiver_type(self, name, pos, ln):
+        ns = name.split(".")[0]
+        expected = self.RECEIVERS.get(ns)
+        if not expected or not pos:
+            return
+        params = self.functions[name]["params"]
+        if not params or params[0] not in self.OBJ_FIRST:
+            return  # p. ej. box.new(left, top, ...) no recibe un id
+        target = pos[0].strip()
+        if not re.fullmatch(r"[A-Za-z_]\w*", target):
+            return
+        got = self.resolve_type(target, ln)
+        if got is None or got == expected:
+            return
+        self.add("T210", ln, f"{name}(): '{target}' es de tipo '{got}' y se espera un '{expected}'")
+
+    def check_calls(self):
+        self.call_count = 0
+        for name, argtext, ln, is_def, offset in self.calls():
+            if is_def:
+                continue
+            if name in self.user_funcs:
+                continue
+            # los cast/constructores de tipo (float(x), int(x)...) no son funciones v6
+            if "." not in name and name in CASTS:
+                continue
+            self.call_count += 1
+            if name not in self.functions:
+                self.add("S010", ln, f"función desconocida: {name}() (no está en la referencia v6)")
+                continue
+
+            spec = self.functions[name]
+            args = split_args(argtext)
+            pos, named, order, dup = classify_args(args)
+            self.check_receiver_type(name, pos, ln)
+
+            for d in dup:
+                self.add("S011", ln, f"argumento nombrado duplicado en {name}(): {d}")
