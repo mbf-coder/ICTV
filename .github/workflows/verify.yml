@@ -1,0 +1,93 @@
+name: verify
+
+# Resultado visible como check en cada push / PR (pestaña Actions del repo).
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pine-v6:
+    name: Pine v6 · sintaxis, tipos, runtime y requisitos
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Cache de dependencias
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.npm
+          key: ${{ runner.os }}-verify-pynescript0.3.0-pinets0.13.1
+
+      - name: Instalar dependencias de verificación
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install "pynescript==0.3.0"
+          # pinets se instala con versión fija para que el CI no dependa de
+          # package.json/package-lock.json: la suite sólo necesita node_modules/pinets
+          npm install --no-audit --no-fund --no-save --no-package-lock pinets@0.13.1
+
+      - name: bash verify/verify_all.sh
+        id: suite
+        env:
+          PYTHON: python3
+          # salida sin colores ANSI para que el log sea legible en el panel
+          NO_COLOR: "1"
+        run: |
+          set -o pipefail
+          bash verify/verify_all.sh 2>&1 | tee verify-report.txt
+
+      - name: Resumen del resultado
+        if: always()
+        env:
+          OUTCOME: ${{ steps.suite.outcome }}
+        run: |
+          status="❌ FALLO"
+          if [ "$OUTCOME" = "success" ]; then status="✅ OK"; fi
+          {
+            echo "## Quantum Flow Analyzer · verificación Pine v6"
+            echo ""
+            echo "**Resultado: $status**"
+            echo ""
+            echo "| Paso | Qué comprueba |"
+            echo "|---|---|"
+            echo "| 1 | Sintaxis: AST con pynescript |"
+            echo "| 2 | Lint: llamadas del script vs firmas v6 y reglas de tipos |"
+            echo "| 3 | Autoprueba del lint (defectos inyectados) |"
+            echo "| 4 | Runtime PineTS: sintéticas + Binance BTCUSDT 15m (SKIP si no hay red) |"
+            echo "| 5 | Checklist de requisitos del indicador |"
+            echo ""
+            echo '```'
+            grep -E "PARSE OK|errores:|RESUMEN|RESULTADO|TODO OK|✗|FAIL" verify-report.txt || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publicar log completo
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-report
+          path: verify-report.txt
+          if-no-files-found: warn
+          retention-days: 14
