@@ -1,0 +1,135 @@
+//@version=6
+// ═══════════════════════════════════════════════════════════════════════════════
+//  QUANTUM FLOW STRATEGY · v6
+//  Estrategia de apertura de ordenes sobre la misma lectura del indicador QFA:
+//  impulso de volumen + fuerza ADX + dominancia compradores/vendedoras +
+//  score cuantico, con salidas por ATR, trailing y cierres por sesion o giro.
+//  Backtest de la ventana de fechas con comision y slippage configurados.
+//  No es asesoramiento financiero.
+// ═══════════════════════════════════════════════════════════════════════════════
+strategy("Quantum Flow Strategy [v6]", "QFS v6", overlay = true,
+     initial_capital = 10000, currency = currency.USD,
+     default_qty_type = strategy.percent_of_equity, default_qty_value = 25,
+     commission_type = strategy.commission.percent, commission_value = 0.05,
+     slippage = 2, pyramiding = 0, process_orders_on_close = true,
+     max_labels_count = 200, max_lines_count = 200)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  0 · VENTANA Y RIESGO DE CUENTA
+// ═══════════════════════════════════════════════════════════════════════════════
+string gBT = "0 · Backtest"
+string gSG = "1 · Senales"
+string gWT = "2 · Pesos del score"
+string gEX = "3 · Salidas"
+string gSE = "4 · Sesiones y filtros"
+
+int    fromDate = input.time(timestamp("01 Jan 2020 00:00 +0000"), "Desde", group = gBT)
+int    toDate   = input.time(timestamp("01 Jan 2030 00:00 +0000"), "Hasta", group = gBT)
+float  ddMax    = input.float(20.0, "Max drawdown % (equity)", minval = 1.0, group = gBT)
+float  dayMax   = input.float(5.0, "Max perdida intradia % (equity)", minval = 1.0, group = gBT)
+bool   allowLng = input.bool(true, "Permitir largos", group = gBT, inline = "dir")
+bool   allowSht = input.bool(true, "Permitir cortos", group = gBT, inline = "dir")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  1 · UMBRALES DE ENTRADA
+// ═══════════════════════════════════════════════════════════════════════════════
+float impMin  = input.float(1.5, "Impulso de volumen minimo (x media)", minval = 1.0, step = 0.1, group = gSG)
+float rangeK  = input.float(0.7, "Rango minimo de la vela (x ATR)", minval = 0.1, step = 0.1, group = gSG)
+int   volLen  = input.int(20, "Media de volumen", minval = 2, group = gSG)
+int   diLen   = input.int(14, "DI length", minval = 1, group = gSG, inline = "adx")
+int   adxLen  = input.int(14, "ADX smoothing", minval = 1, group = gSG, inline = "adx")
+float adxMin  = input.float(18.0, "ADX minimo de tendencia", group = gSG)
+bool  adxRise = input.bool(true, "Exigir ADX creciente", group = gSG)
+float diGap   = input.float(5.0, "Apertura minima +DI/-DI", minval = 0.0, step = 0.5, group = gSG)
+int   ctrlLen = input.int(50, "Ventana de dominancia", minval = 5, group = gSG)
+float domLong = input.float(55.0, "Dominancia compradora minima %", minval = 50.0, maxval = 90.0, group = gSG)
+float domShrt = input.float(45.0, "Dominancia vendedora maxima %", minval = 10.0, maxval = 50.0, group = gSG)
+float strongT = input.float(55.0, "Score minimo de entrada", minval = 10.0, group = gSG)
+int   momLen  = input.int(12, "Momentum length", minval = 1, group = gSG)
+int   atrLen  = input.int(14, "ATR length", minval = 1, group = gSG)
+
+// ── Pesos del score (misma formula del indicador) ────────────────────────────
+int wTrend  = input.int(25, "Peso tendencia (EMAs)", minval = 0, maxval = 100, group = gWT)
+int wAdx    = input.int(20, "Peso ADX", minval = 0, maxval = 100, group = gWT)
+int wMom    = input.int(15, "Peso momentum", minval = 0, maxval = 100, group = gWT)
+int wOF     = input.int(25, "Peso orderflow", minval = 0, maxval = 100, group = gWT)
+int wStruct = input.int(15, "Peso estructura", minval = 0, maxval = 100, group = gWT)
+
+// ── Salidas ────────────────────────────────────────────────────────────────────
+float stopK   = input.float(1.5, "Stop loss (x ATR)", minval = 0.2, step = 0.1, group = gEX)
+float tpK     = input.float(3.0, "Take profit (x ATR)", minval = 0.2, step = 0.1, group = gEX)
+bool  useTrl  = input.bool(true, "Trailing tras TP1", group = gEX, inline = "trl")
+float trlActK = input.float(1.5, "Activa en (x ATR)", minval = 0.2, step = 0.1, group = gEX, inline = "trl")
+float trlOffK = input.float(1.0, "Distancia (x ATR)", minval = 0.2, step = 0.1, group = gEX, inline = "trl")
+bool  oppExit = input.bool(true, "Cerrar en senal opuesta", group = gEX)
+bool  sesExit = input.bool(true, "Cerrar al salir de killzone", group = gEX)
+int   maxBars = input.int(100, "Max barras en operacion (0 = sin limite)", minval = 0, group = gEX)
+
+// ── Sesiones Londres/NY ────────────────────────────────────────────────────────
+bool   useSess = input.bool(true, "Operar solo en killzones LON/NY", group = gSE)
+string lonSess = input.string("0700-1100", "Killzone Londres", group = gSE, inline = "kz")
+string nySess  = input.string("1230-1600", "Killzone Nueva York", group = gSE, inline = "kz")
+string sessTZ  = input.string("Etc/UTC", "Zona horaria", group = gSE)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  2 · LECTURA DEL MERCADO (misma matematicas del indicador, proxy OHLC)
+// ═══════════════════════════════════════════════════════════════════════════════
+strategy.risk.max_drawdown(ddMax, strategy.percent_of_equity)
+strategy.risk.max_intraday_loss(dayMax, strategy.percent_of_equity)
+
+float atrVal = ta.atr(atrLen)
+float tickSv = nz(syminfo.mintick, 1e-10)
+float ema1   = ta.ema(close, 9)
+float ema2   = ta.ema(close, 21)
+float ema3   = ta.ema(close, 50)
+float ema4   = ta.ema(close, 200)
+float volMA  = ta.sma(volume, volLen)
+float relVol = volMA > 0 ? volume / volMA : 0.0
+float momVal = ta.mom(close, momLen)
+[diP, diM, adxVal] = ta.dmi(diLen, adxLen)
+
+// ── Delta proxy OHLC (misma reparticion del modo Proxy del indicador) ───────
+float barRange = math.max(high - low, tickSv)
+float pBody = close - open
+float pUp   = high - math.max(open, close)
+float pDn   = math.min(open, close) - low
+float buyV  = volume * (math.max(pBody, 0.0) + pDn) / barRange
+float sellV = volume * (math.max(-pBody, 0.0) + pUp) / barRange
+
+float buySum  = math.sum(buyV, ctrlLen)
+float sellSum = math.sum(sellV, ctrlLen)
+float flowSum = buySum + sellSum
+float control = flowSum > 0 ? buySum / flowSum * 100.0 : 50.0
+float dSlope  = flowSum > 0 ? math.sum(buyV - sellV, ctrlLen) / flowSum * 100.0 : 0.0
+float deltaPc = buyV + sellV > 0 ? (buyV - sellV) / (buyV + sellV) * 100.0 : 0.0
+
+// ── Score cuantico (pesos del indicador) ─────────────────────────────────────
+float tScore = (close > ema4 ? 25 : -25) + (ema1 > ema2 ? 25 : -25) + (ema2 > ema3 ? 25 : -25) + (ema3 > ema4 ? 25 : -25)
+float adxK   = adxVal / 30.0
+float aScore = (diP + diM > 0 ? (diP - diM) / (diP + diM) : 0.0) * 100.0 * adxK
+float mScore = math.max(-100.0, math.min(100.0, (atrVal > 0 ? momVal / atrVal : 0.0) * 40.0))
+float oScore = math.max(-100.0, math.min(100.0, deltaPc * 0.35 + dSlope * 2.5 + (control - 50.0) * 1.6))
+float rngHi  = ta.highest(high, 100)
+float rngLo  = ta.lowest(low, 100)
+float rngPos = rngHi - rngLo > 0 ? (close - rngLo) / (rngHi - rngLo) * 100.0 : 50.0
+float sScore = math.max(-100.0, math.min(100.0, (50.0 - rngPos) * 1.2))
+float wSum   = math.max(1, wTrend + wAdx + wMom + wOF + wStruct)
+float score  = (tScore * wTrend + aScore * wAdx + mScore * wMom + oScore * wOF + sScore * wStruct) / wSum
+
+// ── Las tres condiciones de entrada ──────────────────────────────────────────
+bool volImpulse = relVol >= impMin and (high - low) >= atrVal * rangeK
+bool adxStrong  = adxVal >= adxMin and (not adxRise or adxVal > nz(adxVal[1]))
+bool bullDom    = control >= domLong and deltaPc > 0
+bool bearDom    = control <= domShrt and deltaPc < 0
+bool bullDir    = diP - diM >= diGap
+bool bearDir    = diM - diP >= diGap
+
+bool inLon = not na(time(timeframe.period, lonSess, sessTZ))
+bool inNY  = not na(time(timeframe.period, nySess, sessTZ))
+bool inKill = not useSess or inLon or inNY
+bool inDates = time >= fromDate and time <= toDate
+
+bool longSig  = allowLng and volImpulse and adxStrong and bullDir and bullDom and score >= strongT and inKill and inDates
+bool shortSig = allowSht and volImpulse and adxStrong and bearDir and bearDom and score <= -strongT and inKill and inDates
+
+// ═══════════════════════════════════════════════════════════════════════════════
