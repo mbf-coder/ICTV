@@ -1,0 +1,165 @@
+//@version=6
+// ═══════════════════════════════════════════════════════════════════════════════
+//  QUANTUM FLOW ANALYZER · v6
+//  Orderflow (delta + CVD) · ADX/DI · Momentum · EMAs · SMC (Order Blocks, BOS,
+//  FVG, Premium/Discount) · Perfil de volumen (POC/VAH/VAL) · Footprint intrabar
+//  · Panel de decisión (COMPRAR / VENDER / ESPERAR) con filtro de sesiones Londres/NY
+//
+//  NOTAS
+//  · Delta y footprint se calculan con intrabars (request.security_lower_tf),
+//    por lo que funcionan en cualquier plan. En planes Premium/Ultimate puedes
+//    bajar el timeframe intrabar para más precisión.
+//  · El footprint es una reconstrucción por intrabars, no el footprint nativo.
+//  · No es asesoramiento financiero.
+// ═══════════════════════════════════════════════════════════════════════════════
+indicator("Quantum Flow Analyzer [v6]", "QFA v6", overlay = true,
+     max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  0 · HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
+fCell(table _t, int _col, int _row, string _txt, color _tc, color _bg, string _sz, string _hal) =>
+    table.cell(_t, _col, _row, _txt, text_color = _tc, bgcolor = _bg,
+         text_size = _sz, text_halign = _hal, text_font_family = font.family_monospace)
+
+fBar(float _pct, int _n) =>
+    int filled = int(math.round(math.abs(_pct) / 100.0 * _n))
+    string _s = ""
+    for _i = 1 to _n
+        _s += (_i <= filled ? "█" : "░")
+    _s
+
+fVol(float _v) =>
+    str.tostring(_v, format.volume)
+
+fPx(float _p) =>
+    str.tostring(_p, format.mintick)
+
+fSigV(float _v) =>
+    (_v > 0 ? "+" : "") + str.tostring(_v, format.volume)
+
+fSig0(float _v) =>
+    (_v > 0 ? "+" : "") + str.tostring(_v, "#")
+
+fSig1(float _v) =>
+    (_v > 0 ? "+" : "") + str.tostring(_v, "#.#")
+
+fSig2(float _v) =>
+    (_v > 0 ? "+" : "") + str.tostring(_v, "#.##")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  1 · INPUTS
+// ═══════════════════════════════════════════════════════════════════════════════
+string gProf = "0 · Perfil símbolo/timeframe"
+string gV  = "1 · Visual"
+string gOF = "2 · Orderflow y Delta"
+string gTR = "3 · Tendencia y Momentum"
+string gSM = "4 · SMC y Zonas"
+string gVP = "5 · Perfil de Volumen"
+string gDS = "6 · Panel y Decisión"
+string gFP = "7 · Footprint"
+string gSE = "8 · Sesiones Londres/NY"
+
+// ── Perfil de parámetros por símbolo y timeframe ────────────────────────────
+string profileMode = input.string("Auto", "Perfil de parámetros",
+     options = ["Auto", "Cripto intradía", "Cripto swing", "Forex / ticks", "Acciones e índices", "Manual"],
+     tooltip = "Auto: elige el perfil según el símbolo (volumen real o ticks) y el timeframe del gráfico. Fijo: fuerza un perfil concreto. Manual: usa los ajustes de los grupos 2/3/6 tal cual.", group = gProf)
+
+// ── Visual ────────────────────────────────────────────────────────────────────
+bool  showEMA   = input.bool(true, "Mostrar EMAs", group = gV)
+int   lenE1     = input.int(9,   "rápida",    minval = 1, group = gV, inline = "ema")
+int   lenE2     = input.int(21,  "media",     minval = 1, group = gV, inline = "ema")
+int   lenE3     = input.int(50,  "lenta",     minval = 1, group = gV, inline = "ema")
+int   lenE4     = input.int(200, "tendencia", minval = 1, group = gV, inline = "ema")
+bool  showVwap  = input.bool(true, "Mostrar VWAP de sesión", group = gV)
+color colBull   = input.color(#26A69A, "Alcista", group = gV, inline = "col")
+color colBear   = input.color(#EF5350, "Bajista", group = gV, inline = "col")
+bool  colorBars = input.bool(false, "Colorear velas según delta", group = gV)
+bool  showOB    = input.bool(true, "Order Blocks SMC", group = gV)
+bool  showFVG   = input.bool(true, "Fair Value Gaps", group = gV)
+bool  showBOS   = input.bool(true, "Marcar BOS / CHoCH", group = gV)
+bool  showSig   = input.bool(true, "Etiquetas de señal fuerte", group = gV)
+
+// ── Orderflow / Delta ─────────────────────────────────────────────────────────
+string ltfDelta = input.timeframe("1", "Timeframe intrabar (delta y footprint)",
+     tooltip = "Marco temporal MENOR que el del gráfico. Debe ser inferior al del chart. En gráficos de 1m usa 1S (requiere segundos). Si no hay intrabars disponibles, el motor cae automáticamente al proxy OHLC.", group = gOF)
+string deltaMode = input.string("Intrabar", "Motor de delta",
+     options = ["Intrabar", "Proxy OHLC"],
+     tooltip = "Intrabar: usa precios y volumen de barras menores (más fiel). Proxy OHLC: reparte el volumen de la vela entre cuerpo y mechas (más rápido).", group = gOF)
+int   maxIB     = input.int(300, "Máx. intrabars por vela", minval = 20, maxval = 2000, group = gOF)
+int   volLen    = input.int(20, "Media de volumen", minval = 2, group = gOF)
+int   ctrlLen   = input.int(50, "Ventana de control compradores/vendedores", minval = 5, group = gOF)
+bool  resetCvd  = input.bool(true, "Reiniciar CVD por sesión", group = gOF)
+float absorbVol = input.float(1.5, "Volumen relativo de absorción", minval = 1.0, step = 0.1, group = gOF)
+
+// ── Tendencia ─────────────────────────────────────────────────────────────────
+int   diLen     = input.int(14, "DI length", minval = 1, group = gTR, inline = "adx")
+int   adxLen    = input.int(14, "ADX smoothing", minval = 1, group = gTR, inline = "adx")
+float adxMin    = input.float(20.0, "ADX mínimo de tendencia", group = gTR)
+float adxStrong = input.float(30.0, "ADX de fuerza alta", group = gTR)
+int   momLen    = input.int(12, "Momentum length", minval = 1, group = gTR)
+int   atrLen    = input.int(14, "ATR length", minval = 1, group = gTR)
+
+// ── SMC ───────────────────────────────────────────────────────────────────────
+int   pivLen    = input.int(5, "Fuerza del swing", minval = 2, maxval = 50, group = gSM)
+int   obLook    = input.int(60, "Barras para localizar el Order Block", minval = 5, maxval = 200, group = gSM)
+int   maxOB     = input.int(12, "Máx. Order Blocks", minval = 1, maxval = 40, group = gSM)
+int   obExt     = input.int(30, "Extensión del OB (barras)", minval = 2, group = gSM)
+int   maxFVG    = input.int(10, "Máx. FVG", minval = 1, maxval = 40, group = gSM)
+int   fvgExt    = input.int(25, "Extensión del FVG (barras)", minval = 2, group = gSM)
+int   rangeLen  = input.int(100, "Lookback premium/discount", minval = 10, maxval = 400, group = gSM)
+float zoneTol   = input.float(0.25, "Tolerancia de zona (x ATR)", minval = 0.0, step = 0.05, group = gSM)
+
+// ── Perfil de volumen ─────────────────────────────────────────────────────────
+bool  showVP    = input.bool(true, "Mostrar POC / VAH / VAL", group = gVP)
+int   vpBins    = input.int(24, "Bins del perfil", minval = 8, maxval = 80, group = gVP)
+int   vpLook    = input.int(150, "Barras del perfil", minval = 20, maxval = 250, group = gVP)
+float vpVA      = input.float(70.0, "Value Area %", minval = 50, maxval = 95, group = gVP)
+
+// ── Panel / decisión ──────────────────────────────────────────────────────────
+bool   showDash = input.bool(true, "Mostrar panel", group = gDS)
+string dashPos  = input.string("Top Right", "Posición del panel",
+     options = ["Top Right", "Top Left", "Middle Right", "Bottom Right", "Bottom Left"], group = gDS)
+string dashSz   = input.string("Normal", "Tamaño del texto",
+     options = ["Compacto", "Normal", "Grande"], group = gDS)
+float  strongTh = input.float(60.0, "Umbral señal fuerte", minval = 30, maxval = 95, step = 5, group = gDS)
+float  softTh   = input.float(30.0, "Umbral señal", minval = 10, maxval = 90, step = 5, group = gDS)
+bool   reqZone  = input.bool(true, "Señal fuerte solo en zona de interés", group = gDS)
+int    wTrend   = input.int(25, "Peso tendencia (EMAs)", minval = 0, maxval = 100, group = gDS)
+int    wAdx     = input.int(20, "Peso ADX", minval = 0, maxval = 100, group = gDS)
+int    wMom     = input.int(15, "Peso momentum", minval = 0, maxval = 100, group = gDS)
+int    wOF      = input.int(25, "Peso orderflow", minval = 0, maxval = 100, group = gDS)
+int    wStruct  = input.int(15, "Peso estructura", minval = 0, maxval = 100, group = gDS)
+
+// ── Footprint ─────────────────────────────────────────────────────────────────
+bool   showFP   = input.bool(false, "Activar footprint (tabla de precios)",
+     tooltip = "Dibuja el footprint de la última vela: volumen comprador/vendedor por nivel de precio, delta por fila y desequilibrios. Requiere intrabars; si no hay, no se dibuja. Actívalo o desactívalo cuando quieras.", group = gFP)
+int    fpRows   = input.int(14, "Filas de precio", minval = 5, maxval = 30, group = gFP)
+string fpPos    = input.string("Middle Right", "Posición del footprint",
+     options = ["Middle Right", "Bottom Right", "Top Right", "Middle Left", "Bottom Left"], group = gFP)
+float  fpImb    = input.float(3.0, "Ratio de desequilibrio", minval = 1.5, step = 0.5, group = gFP)
+
+// ── Sesiones Londres / Nueva York (killzones) ─────────────────────────────────
+bool   useSess   = input.bool(true, "Filtrar por sesión Londres/NY", group = gSE,
+     tooltip = "Si está activo, el score se atenúa fuera de las killzones de Londres y Nueva York y las señales FUERTES solo se permiten dentro de sesión.")
+string londonSess = input.session("0700-1100", "Killzone Londres", group = gSE, inline = "kz")
+string nySess     = input.session("1230-1600", "Killzone Nueva York", group = gSE, inline = "kz")
+string sessTZ     = input.string("Etc/UTC", "Zona horaria de las sesiones", group = gSE,
+     tooltip = "Zona horaria IANA de las killzones, p. ej. Etc/UTC, America/New_York o Europe/London.")
+float  sessPenalty = input.float(0.5, "Atenuación fuera de sesión (× score)", minval = 0.1, maxval = 1.0, step = 0.05, group = gSE)
+bool   sessBlockStrong = input.bool(true, "Solo FUERTE dentro de killzone", group = gSE,
+     tooltip = "Fuera de sesión las señales fuertes se degradan a normales aunque el score supere el umbral fuerte.")
+
+// ── Paleta del panel ──────────────────────────────────────────────────────────
+color cBg     = color.new(#0B1220, 5)
+color cBgAlt  = color.new(#131F33, 5)
+color cHead   = color.new(#1B2A4A, 0)
+color cText   = #D6DEEB
+color cMuted  = #7C8AA5
+color cBull   = #00C853
+color cBear   = #FF1744
+color cWarn   = #FFB300
+color cNeut   = #8A93A6
+color cFrame  = #2A3B5C
+color cBorder = #1E2C46
+color cNone   = color.new(#000000, 100)
