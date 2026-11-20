@@ -54,3 +54,286 @@ ENUM_NAMESPACES = ("text.align_", "size.", "position.", "plot.style_", "label.st
                    "display.", "format.", "font.family_", "barmerge.", "scale.",
                    "order.", "alert.freq_", "hline.style_", "currency.", "session.",
                    "strategy.", "math.")
+
+
+class Finding:
+    __slots__ = ("code", "line", "col", "msg", "severity")
+
+    def __init__(self, code, line, msg, severity="error", col=0):
+        self.code, self.line, self.msg, self.severity, self.col = code, line, msg, severity, col
+
+    def __str__(self):
+        return f"{self.severity.upper():7} {self.code} línea {self.line}: {self.msg}"
+
+
+def line_starts(text):
+    starts = [0]
+    for m in re.finditer("\n", text):
+        starts.append(m.end())
+    return starts
+
+
+def line_of(starts, offset):
+    return bisect.bisect_right(starts, offset)
+
+
+def mask_strings(text):
+    """Sustituye el contenido de los literales por \x01 para poder parsear
+    sin que comas/paréntesis dentro de strings rompan el análisis."""
+    return re.sub(r'"(?:[^"\\]|\\.)*"', '"\x01"', text)
+
+
+def strip_comment(line):
+    out, in_str = [], False
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if ch == '"':
+            in_str = not in_str
+        if not in_str and ch == "/" and i + 1 < len(line) and line[i + 1] == "/":
+            break
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def blank_comments(text):
+    """Reemplaza los comentarios por espacios conservando offsets y líneas."""
+    out = []
+    for line in text.split("\n"):
+        code = strip_comment(line)
+        out.append(code + " " * (len(line) - len(code)))
+    return "\n".join(out)
+
+
+def split_args(argtext):
+    """Divide argumentos de nivel superior respetando paréntesis/corchetes."""
+    args, depth, cur = [], 0, ""
+    for ch in argtext:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            args.append(cur.strip())
+            cur = ""
+        else:
+            cur += ch
+    if cur.strip() or argtext.strip():
+        args.append(cur.strip())
+    return [a for a in args if a != ""]
+
+
+NAMED_RE = re.compile(r"^([A-Za-z_]\w*)\s*=(?!=)\s*(.*)$", re.S)
+
+
+def classify_args(args):
+    pos, named, order, dup = [], {}, [], []
+    seen_named = False
+    for a in args:
+        m = NAMED_RE.match(a)
+        if m and not a.lstrip().startswith(("==", ">=", "<=", "!=")):
+            name, val = m.group(1), m.group(2).strip()
+            if name in named:
+                dup.append(name)
+            named[name] = val
+            order.append(("named", name, val))
+            seen_named = True
+        else:
+            pos.append(a)
+            order.append(("pos", a, a))
+    return pos, named, order, dup
+
+
+class Linter:
+    def __init__(self, path, ref):
+        self.path = path
+        self.raw = open(path, encoding="utf-8").read()
+        self.lines = self.raw.split("\n")
+        self.masked = mask_strings(self.raw)
+        self.code = blank_comments(self.masked)
+        self.starts = line_starts(self.code)
+        self.ref = ref
+        self.functions = ref["functions"]
+        self.findings = []
+        self._index_declarations()
+
+    # ── utilidades ───────────────────────────────────────────────────────────
+    def add(self, code, line, msg, severity="error"):
+        self.findings.append(Finding(code, line, msg, severity))
+
+    def is_builtin_name(self, name):
+        if name in self.functions or name in CASTS or name in KEYWORDS:
+            return True
+        if name in self.user_funcs:
+            return True
+        return False
+
+    # ── índice de declaraciones / funciones de usuario / tipos ──────────────
+    def _index_declarations(self):
+        self.user_funcs = {}
+        self.declared = {}
+        self.var_init = {}
+        self.var_type = {}
+        self.type_decls = {}
+        self.bool_vars = set()
+        self.intrabar_arrays = []
+
+        type_re = (r"(?:float|int|bool|string|color|line|label|box|table|plot|"
+                   r"array<[^>]+>|matrix<[^>]+>|map<[^>]+>|linefill|polyline|chart\.point)")
+        decl_typed = re.compile(rf"^\s*(?:var\s+|varip\s+)?({type_re})\s+([A-Za-z_]\w*)\s*=(.*)$")
+        decl_var = re.compile(r"^\s*(?:var\s+|varip\s+)([A-Za-z_]\w*)\s*=(.*)$")
+        decl_plain = re.compile(r"^\s*([A-Za-z_]\w*)\s*=(?!=)\s*(.*)$")
+        decl_tuple = re.compile(r"^\s*\[([^\]]+)\]\s*=(.*)$")
+        fundef = re.compile(r"^\s*([A-Za-z_]\w*)\s*\(([^)]*)\)\s*=>")
+
+        for idx, raw in enumerate(self.lines):
+            line = strip_comment(raw)
+            if not line.strip():
+                continue
+            indent = len(line) - len(line.lstrip(" "))
+
+            m = fundef.match(line)
+            if m:
+                name = m.group(1)
+                raw_params = [p.strip() for p in m.group(2).split(",") if p.strip()]
+                params = [p.split("=")[0].strip() for p in raw_params]
+                self.user_funcs[name] = params
+                for rp in raw_params:
+                    bits = rp.split()
+                    if len(bits) >= 2:
+                        pname = bits[-1].split("=")[0]
+                        ptype = " ".join(bits[:-1])
+                        base = ptype.split("<")[0].strip()
+                        self.var_type[pname] = base
+                        self.type_decls.setdefault(pname, []).append((0, 0, base))
+                        self.declared.setdefault(pname, idx + 1)
+                continue
+
+            m = decl_tuple.match(line)
+            if m:
+                rhs = m.group(2)
+                names = [n.strip() for n in m.group(1).split(",")]
+                for n in names:
+                    if re.fullmatch(r"[A-Za-z_]\w*", n):
+                        self.declared.setdefault(n, idx + 1)
+                        self.var_init[n] = ""
+                if "request.security_lower_tf" in rhs:
+                    self.intrabar_arrays.extend(names)
+                continue
+
+            m = decl_typed.match(line)
+            if m:
+                typ, name, rhs = m.group(1), m.group(2), m.group(3)
+                self.declared.setdefault(name, idx + 1)
+                self.var_init[name] = rhs.strip()
+                base = typ.split("<")[0].strip()
+                self.var_type[name] = base
+                self.type_decls.setdefault(name, []).append((idx + 1, indent, base))
+                if typ == "bool":
+                    self.bool_vars.add(name)
+                continue
+
+            m = decl_var.match(line)
+            if m:
+                name, rhs = m.group(1), m.group(2)
+                self.declared.setdefault(name, idx + 1)
+                self.var_init[name] = rhs.strip()
+                if re.search(r"(>=|<=|==|!=|>|<|\band\b|\bor\b|\bnot\b|\btrue\b|\bfalse\b)", rhs):
+                    self.bool_vars.add(name)
+                continue
+
+            m = decl_plain.match(line)
+            if m and indent == 0:
+                name, rhs = m.group(1), m.group(2)
+                self.declared.setdefault(name, idx + 1)
+                self.var_init[name] = rhs.strip()
+                if re.search(r"(>=|<=|==|!=|>|<|\band\b|\bor\b|\bnot\b|\btrue\b|\bfalse\b)", rhs):
+                    self.bool_vars.add(name)
+                continue
+
+            # variables de bucle
+            for fm in re.finditer(r"\bfor\s+([A-Za-z_]\w*)\s*=", line):
+                self.declared.setdefault(fm.group(1), idx + 1)
+            for fm in re.finditer(r"\bfor\s+\[([^\]]+)\]\s+in\b", line):
+                for n in fm.group(1).split(","):
+                    self.declared.setdefault(n.strip(), idx + 1)
+
+    # ── extracción de llamadas ───────────────────────────────────────────────
+    def calls(self):
+        pattern = re.compile(r"(?<![\w.])([A-Za-z_][\w.]*)\s*(?:<[^<>()]*>)?\s*\(")
+        for m in pattern.finditer(self.code):
+            name = m.group(1)
+            if name in ("if", "for", "while", "switch", "and", "or", "not", "in"):
+                continue
+            open_idx = m.end() - 1
+            depth, i = 0, open_idx
+            while i < len(self.code):
+                ch = self.code[i]
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                i += 1
+            if depth != 0:
+                yield name, "", line_of(self.starts, m.start()), True, m.start()
+                continue
+            argtext = self.masked[open_idx + 1:i]
+            after = self.code[i + 1:i + 4]
+            is_def = after.lstrip().startswith("=>")
+            yield name, argtext, line_of(self.starts, m.start()), is_def, m.start()
+
+    # ── resolución de valores enum ───────────────────────────────────────────
+    def resolves_to(self, value, allowed, depth=0):
+        """True si `value` es un valor permitido o una variable cuyo inicializador
+        sólo usa valores permitidos."""
+        value = value.strip()
+        if not value:
+            return False
+        if value in allowed:
+            return True
+        if depth > 3:
+            return False
+        if re.fullmatch(r"[A-Za-z_]\w*", value) and value in self.var_init:
+            init = self.var_init[value]
+            if init:
+                tokens = re.findall(r"[A-Za-z_][\w.]*", init)
+                cand = [t for t in tokens if any(t.startswith(p) for p in ENUM_NAMESPACES)]
+                if cand and all(t in allowed for t in cand):
+                    return True
+                if any(t in allowed for t in tokens):
+                    return all(t in allowed or not any(t.startswith(p) for p in ENUM_NAMESPACES) for t in tokens)
+        return False
+
+    # ── chequeos ─────────────────────────────────────────────────────────────
+    NAMESPACES = {"ta", "math", "str", "array", "box", "line", "label", "table", "color",
+                  "input", "plot", "display", "format", "font", "size", "text", "position",
+                  "request", "strategy", "alert", "chart", "currency", "session", "ticker",
+                  "dayofweek", "extend", "xloc", "yloc", "shape", "location", "scale", "order",
+                  "hline", "linefill", "matrix", "map", "polyline", "runtime", "barmerge",
+                  "adjustment", "backadjustment", "settlement_as_close", "earnings", "dividends",
+                  "splits", "syminfo", "barstate", "timeframe", "plotshape", "hline_style",
+                  "log", "polyline_style", "time"}
+
+    def check_identifiers(self):
+        known = set(self.declared) | set(self.user_funcs) | set(self.functions) | set(CASTS)
+        known |= set(KEYWORDS) | self.NAMESPACES
+        for v in self.ref.get("variables", []) + self.ref.get("constants", []):
+            known.add(v)
+            known.add(v.split(".")[-1])
+        for idx, line in enumerate(self.code.split("\n")):
+            for m in re.finditer(r"(?<![\w.])([A-Za-z_]\w*)(?![\w.])", line):
+                name = m.group(1)
+                if name in known:
+                    continue
+                before = line[max(0, m.start() - 1):m.start()]
+                if before in ('"', "#"):
+                    continue
+                rest = line[m.end():]
+                if re.match(r"\s*=(?!=)", rest):  # clave de argumento nombrado
+                    continue
+                if re.match(r"\s*:=", rest):
+                    continue
+                self.add("W001", idx + 1, f"identificador no declarado: '{name}'", severity="warning")
