@@ -1,0 +1,164 @@
+plot(effAdxStr, "Perfil adxStrong", display = display.data_window)
+plot(effOfDK, "Perfil deltaK", display = display.data_window)
+
+// ── Etiquetas de estructura ───────────────────────────────────────────────────
+var array<label> structLabels = array.new<label>(0)
+if showBOS and bosUp
+    label sLbl = label.new(bar_index, high + atrVal * 0.35,
+         chochUp ? "CHoCH ↑" : "BOS ↑",
+         style = label.style_label_down, color = color.new(colBull, 15),
+         textcolor = color.white, size = size.tiny)
+    array.push(structLabels, sLbl)
+if showBOS and bosDn
+    label sLblD = label.new(bar_index, low - atrVal * 0.35,
+         chochDn ? "CHoCH ↓" : "BOS ↓",
+         style = label.style_label_up, color = color.new(colBear, 15),
+         textcolor = color.white, size = size.tiny)
+    array.push(structLabels, sLblD)
+while array.size(structLabels) > 80
+    label deadLbl = array.shift(structLabels)
+    label.delete(deadLbl)
+
+// ── Señales fuertes en zonas de interés ──────────────────────────────────────
+bool sigStrongBuy  = barstate.isconfirmed and warmupOk and score >= effStrongTh and allowStrong and (not reqZone or zoneBuy)
+bool sigStrongSell = barstate.isconfirmed and warmupOk and score <= -effStrongTh and allowStrong and (not reqZone or zoneSell)
+bool sigBuy        = barstate.isconfirmed and warmupOk and score >= effSoftTh and zoneBuy
+bool sigSell       = barstate.isconfirmed and warmupOk and score <= -effSoftTh and zoneSell
+
+var array<label> sigLabels = array.new<label>(0)
+if showSig and sigStrongBuy
+    label bLbl = label.new(bar_index, low - atrVal * 0.6,
+         "◆ COMPRA FUERTE  " + str.tostring(math.round(score)) + "%",
+         style = label.style_label_up, color = color.new(cBull, 5),
+         textcolor = color.black, size = size.small)
+    array.push(sigLabels, bLbl)
+if showSig and sigStrongSell
+    label sSlbl = label.new(bar_index, high + atrVal * 0.6,
+         "◆ VENTA FUERTE  " + str.tostring(math.round(math.abs(score))) + "%",
+         style = label.style_label_down, color = color.new(cBear, 5),
+         textcolor = color.white, size = size.small)
+    array.push(sigLabels, sSlbl)
+while array.size(sigLabels) > 60
+    label deadSig = array.shift(sigLabels)
+    label.delete(deadSig)
+
+alertcondition(sigStrongBuy, "QFA · Fuerte compra en zona", "QFA: FUERTE COMPRA en {{ticker}} ({{interval}})")
+alertcondition(sigStrongSell, "QFA · Fuerte venta en zona", "QFA: FUERTE VENTA en {{ticker}} ({{interval}})")
+alertcondition(sigBuy, "QFA · Compra en zona", "QFA: señal de COMPRA en {{ticker}} ({{interval}})")
+alertcondition(sigSell, "QFA · Venta en zona", "QFA: señal de VENTA en {{ticker}} ({{interval}})")
+
+// Banderas de señal exportadas para backtest (1 = señal FUERTE en esa vela).
+// Series completas (no se podan como las etiquetas) para medir nº de señales,
+// win-rate a N barras y MFE/MAE sobre datos reales.
+plot(sigStrongBuy ? 1.0 : 0.0, "SIG FUERTE COMPRA", display = display.data_window)
+plot(sigStrongSell ? 1.0 : 0.0, "SIG FUERTE VENTA", display = display.data_window)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  7 · FOOTPRINT INTRABAR (activar / desactivar)
+// ═══════════════════════════════════════════════════════════════════════════════
+string szFP = dashSz == "Compacto" ? size.tiny : dashSz == "Grande" ? size.normal : size.small
+
+string fpPosition = fpPos == "Middle Right" ? position.middle_right :
+     fpPos == "Top Right" ? position.top_right :
+     fpPos == "Bottom Right" ? position.bottom_right :
+     fpPos == "Middle Left" ? position.middle_left : position.bottom_left
+
+var table fpTable = table.new(fpPosition, 4, fpRows + 3,
+     bgcolor = cBg, frame_color = cFrame, frame_width = 1,
+     border_color = cBorder, border_width = 1)
+
+if showFP and barstate.islast
+    float fpHi = high
+    float fpLo = low
+    float fpSpan = math.max(fpHi - fpLo, tickSafe)
+    float fpStep = fpSpan / fpRows
+    array<float> rowBuy  = array.new<float>(fpRows, 0.0)
+    array<float> rowSell = array.new<float>(fpRows, 0.0)
+    int fpN = math.min(array.size(ibO), math.min(array.size(ibH), math.min(array.size(ibL), math.min(array.size(ibC), array.size(ibV)))))
+    fpN := math.min(fpN, maxIB)
+    if fpN > 0
+        for i = 0 to fpN - 1
+            float io = array.get(ibO, i)
+            float ic = array.get(ibC, i)
+            float ih = array.get(ibH, i)
+            float il = array.get(ibL, i)
+            float iv = array.get(ibV, i)
+            int rLo = int(math.floor((il - fpLo) / fpStep))
+            int rHi = int(math.floor((ih - fpLo) / fpStep))
+            rLo := math.max(0, math.min(fpRows - 1, rLo))
+            rHi := math.max(0, math.min(fpRows - 1, rHi))
+            int cnt = rHi - rLo + 1
+            float per = cnt > 0 ? iv / cnt : iv
+            bool isBuy = ic >= io
+            for k = rLo to rHi
+                if isBuy
+                    array.set(rowBuy, k, array.get(rowBuy, k) + per)
+                else
+                    array.set(rowSell, k, array.get(rowSell, k) + per)
+    float fpBuy  = 0.0
+    float fpSell = 0.0
+    int   fpPoc  = 0
+    float fpMax  = -1.0
+    for k = 0 to fpRows - 1
+        float fb = array.get(rowBuy, k)
+        float fs = array.get(rowSell, k)
+        fpBuy  += fb
+        fpSell += fs
+        if fb + fs > fpMax
+            fpMax := fb + fs
+            fpPoc := k
+    float fpDelta = fpBuy - fpSell
+    color fpDCol = fpDelta > 0 ? cBull : fpDelta < 0 ? cBear : cNeut
+    // cabecera
+    fCell(fpTable, 0, 0, "PRECIO",  cMuted, cHead, szFP, text.align_left)
+    fCell(fpTable, 1, 0, "COMPRA",  cMuted, cHead, szFP, text.align_right)
+    fCell(fpTable, 2, 0, "VENTA",   cMuted, cHead, szFP, text.align_right)
+    fCell(fpTable, 3, 0, "DELTA",   cMuted, cHead, szFP, text.align_right)
+    // filas de precio (de arriba a abajo)
+    for r = 0 to fpRows - 1
+        int   k   = fpRows - 1 - r
+        float px  = fpLo + (k + 0.5) * fpStep
+        float rb  = array.get(rowBuy, k)
+        float rs  = array.get(rowSell, k)
+        float rd  = rb - rs
+        color rBg = k == fpPoc ? color.new(#1B2A4A, 0) : (r % 2 == 0 ? cBgAlt : cBg)
+        color bgB = rb > rs * fpImb ? color.new(cBull, 82) : rBg
+        color bgS = rs > rb * fpImb ? color.new(cBear, 82) : rBg
+        color rdC = rd > 0 ? cBull : rd < 0 ? cBear : cNeut
+        string mark = rb > rs * fpImb ? " ▲" : rs > rb * fpImb ? " ▼" : ""
+        fCell(fpTable, 0, r + 1, fPx(px) + mark, cText, rBg, szFP, text.align_right)
+        fCell(fpTable, 1, r + 1, fVol(rb), cText, bgB, szFP, text.align_right)
+        fCell(fpTable, 2, r + 1, fVol(rs), cText, bgS, szFP, text.align_right)
+        fCell(fpTable, 3, r + 1, fSigV(rd), rdC, rBg, szFP, text.align_right)
+    // totales
+    fCell(fpTable, 0, fpRows + 1, "TOTAL", cMuted, cHead, szFP, text.align_left)
+    fCell(fpTable, 1, fpRows + 1, fVol(fpBuy),  cBull, cHead, szFP, text.align_right)
+    fCell(fpTable, 2, fpRows + 1, fVol(fpSell), cBear, cHead, szFP, text.align_right)
+    fCell(fpTable, 3, fpRows + 1, fSigV(fpDelta), fpDCol, cHead, szFP, text.align_right)
+    // pie
+    fCell(fpTable, 0, fpRows + 2, "FP intrabar " + ltfDelta, cMuted, cBg, szFP, text.align_left)
+    fCell(fpTable, 1, fpRows + 2, fpN > 0 ? str.tostring(fpN) + " bars" : "sin intrabar", cMuted, cBg, szFP, text.align_right)
+    fCell(fpTable, 2, fpRows + 2, "", cMuted, cBg, szFP, text.align_right)
+    fCell(fpTable, 3, fpRows + 2, "POC ▲", cWarn, cBg, szFP, text.align_right)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  8 · PANEL / DASHBOARD
+// ═══════════════════════════════════════════════════════════════════════════════
+string szD  = dashSz == "Compacto" ? size.tiny : dashSz == "Grande" ? size.normal : size.small
+string szDL = dashSz == "Grande" ? size.normal : size.small
+
+string dashPosition = dashPos == "Top Right" ? position.top_right :
+     dashPos == "Top Left" ? position.top_left :
+     dashPos == "Middle Right" ? position.middle_right :
+     dashPos == "Bottom Right" ? position.bottom_right : position.bottom_left
+
+var table dash = table.new(dashPosition, 4, 29,
+     bgcolor = cBg, frame_color = cFrame, frame_width = 1,
+     border_color = cBorder, border_width = 1)
+
+// ── textos derivados ─────────────────────────────────────────────────────────
+string volState  = relVol >= 1.5 ? "ALTO" : relVol <= 0.7 ? "BAJO" : "NORMAL"
+color  volCol    = relVol >= 1.5 ? cWarn : relVol <= 0.7 ? cMuted : cText
+string deltaState = deltaPct > 10.0 ? "COMPRA" : deltaPct < -10.0 ? "VENTA" : "NEUTRO"
+color  deltaCol   = deltaPct > 10.0 ? cBull : deltaPct < -10.0 ? cBear : cNeut
+string cvdState  = cvdSlopePct > 2.0 ? "ACUMULANDO" : cvdSlopePct < -2.0 ? "DISTRIBUYENDO" : "PLANO"
