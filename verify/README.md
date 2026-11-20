@@ -53,3 +53,10 @@ validador, no el indicador:
 El compilador propietario de TradingView. PineTS es un runtime independiente (experimental para v6
 nativo) y no garantiza el 100 % de paridad con el motor de TradingView. El paso que queda fuera del
 sandbox es pegar el archivo en el Pine Editor y pulsar *Guardar*.
+
+## Entregables por partes (ensamblado determinista)
+
+Los tres archivos grandes viven como partes (`verify/parts/lint.*`, `verify/parts/rt.*`,
+`quant-flow/src/qfa.*`) y `verify/assemble.py` los concatena verificando su sha256.
+`bash verify/verify_all.sh` ensambla primero (paso 0); el CI publica los ensamblados en `main`.
+Para regenerar el `.pine` desde un clon fresco basta con correr la suite.

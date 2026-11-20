@@ -4,6 +4,7 @@
 #   bash verify/verify_all.sh
 #
 # Pasos:
+#   0. ensamblado determinista de los entregables desde sus partes
 #   1. parse AST con pynescript (gramática Pine real)
 #   2. lint estático v6 contra 475 firmas de la referencia oficial
 #   3. autoprueba del lint (18 defectos inyectados que debe detectar)
@@ -29,6 +30,11 @@ else
     fail() { printf '\n\033[31m✗ %s\033[0m\n' "$1" >&2; exit 1; }
     ok()   { printf '\n\033[32m✓ %s\033[0m\n' "$1"; }
 fi
+
+# ── ensamblado de entregables (partes versionadas → archivos completos) ─────
+# Los archivos grandes viven como partes (verify/parts/*, quant-flow/src/*);
+# aquí se reconstruyen y se verifica su sha256 antes de comprobar nada.
+python3 verify/assemble.py || { printf '\n✗ no se pudieron ensamblar los entregables\n' >&2; exit 1; }
 
 # ── intérprete de Python ─────────────────────────────────────────────────────
 PY="${PYTHON:-.venv/bin/python}"

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: verify-${{ github.workflow }}-${{ github.ref }}
@@ -57,6 +57,20 @@ jobs:
         run: |
           set -o pipefail
           bash verify/verify_all.sh 2>&1 | tee verify-report.txt
+
+      - name: Publicar ensamblados (pine + harness)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          python3 verify/assemble.py
+          if [ -n "$(git status --porcelain -- quant-flow/QuantumFlowAnalyzer_v6.pine verify/pine_v6_lint.py verify/verify_runtime.mjs)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add quant-flow/QuantumFlowAnalyzer_v6.pine verify/pine_v6_lint.py verify/verify_runtime.mjs
+            git commit -m "QFA v6: ensamblados desde partes (CI) [skip ci]"
+            git push
+          else
+            echo "ensamblados sin cambios"
+          fi
 
       - name: Resumen del resultado
         if: always()
