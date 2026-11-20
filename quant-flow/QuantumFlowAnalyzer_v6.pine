@@ -1,0 +1,988 @@
+//@version=6
+// ═══════════════════════════════════════════════════════════════════════════════
+//  QUANTUM FLOW ANALYZER · v6
+//  Orderflow (delta + CVD) · ADX/DI · Momentum · EMAs · SMC (Order Blocks, BOS,
+//  FVG, Premium/Discount) · Perfil de volumen (POC/VAH/VAL) · Footprint intrabar
+//  · Panel de decisión (COMPRAR / VENDER / ESPERAR) con filtro de sesiones Londres/NY
+//
+//  NOTAS
+//  · Delta y footprint se calculan con intrabars (request.security_lower_tf),
+//    por lo que funcionan en cualquier plan. En planes Premium/Ultimate puedes
+//    bajar el timeframe intrabar para más precisión.
+//  · El footprint es una reconstrucción por intrabars, no el footprint nativo.
+//  · No es asesoramiento financiero.
+// ═══════════════════════════════════════════════════════════════════════════════
+indicator("Quantum Flow Analyzer [v6]", "QFA v6", overlay = true,
+     max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  0 · HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
+fCell(table _t, int _col, int _row, string _txt, color _tc, color _bg, string _sz, string _hal) =>
+    table.cell(_t, _col, _row, _txt, text_color = _tc, bgcolor = _bg,
+         text_size = _sz, text_halign = _hal, text_font_family = font.family_monospace)
+
+fBar(float _pct, int _n) =>
+    int filled = int(math.round(math.abs(_pct) / 100.0 * _n))
+    string _s = ""
+    for _i = 1 to _n
+        _s += (_i <= filled ? "█" : "░")
+    _s
+
+fVol(float _v) =>
+    str.tostring(_v, format.volume)
+
+fPx(float _p) =>
+    str.tostring(_p, format.mintick)
+
+fSigV(float _v) =>
+    (_v > 0 ? "+" : "") + str.tostring(_v, format.volume)
+
+fSig0(float _v) =>
+    (_v > 0 ? "+" : "") + str.tostring(_v, "#")
+
+fSig1(float _v) =>
+    (_v > 0 ? "+" : "") + str.tostring(_v, "#.#")
+
+fSig2(float _v) =>
+    (_v > 0 ? "+" : "") + str.tostring(_v, "#.##")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  1 · INPUTS
+// ═══════════════════════════════════════════════════════════════════════════════
+string gProf = "0 · Perfil símbolo/timeframe"
+string gV  = "1 · Visual"
+string gOF = "2 · Orderflow y Delta"
+string gTR = "3 · Tendencia y Momentum"
+string gSM = "4 · SMC y Zonas"
+string gVP = "5 · Perfil de Volumen"
+string gDS = "6 · Panel y Decisión"
+string gFP = "7 · Footprint"
+string gSE = "8 · Sesiones Londres/NY"
+
+// ── Perfil de parámetros por símbolo y timeframe ────────────────────────────
+string profileMode = input.string("Auto", "Perfil de parámetros",
+     options = ["Auto", "Cripto intradía", "Cripto swing", "Forex / ticks", "Acciones e índices", "Manual"],
+     tooltip = "Auto: elige el perfil según el símbolo (volumen real o ticks) y el timeframe del gráfico. Fijo: fuerza un perfil concreto. Manual: usa los ajustes de los grupos 2/3/6 tal cual.", group = gProf)
+
+// ── Visual ────────────────────────────────────────────────────────────────────
+bool  showEMA   = input.bool(true, "Mostrar EMAs", group = gV)
+int   lenE1     = input.int(9,   "rápida",    minval = 1, group = gV, inline = "ema")
+int   lenE2     = input.int(21,  "media",     minval = 1, group = gV, inline = "ema")
+int   lenE3     = input.int(50,  "lenta",     minval = 1, group = gV, inline = "ema")
+int   lenE4     = input.int(200, "tendencia", minval = 1, group = gV, inline = "ema")
+bool  showVwap  = input.bool(true, "Mostrar VWAP de sesión", group = gV)
+color colBull   = input.color(#26A69A, "Alcista", group = gV, inline = "col")
+color colBear   = input.color(#EF5350, "Bajista", group = gV, inline = "col")
+bool  colorBars = input.bool(false, "Colorear velas según delta", group = gV)
+bool  showOB    = input.bool(true, "Order Blocks SMC", group = gV)
+bool  showFVG   = input.bool(true, "Fair Value Gaps", group = gV)
+bool  showBOS   = input.bool(true, "Marcar BOS / CHoCH", group = gV)
+bool  showSig   = input.bool(true, "Etiquetas de señal fuerte", group = gV)
+
+// ── Orderflow / Delta ─────────────────────────────────────────────────────────
+string ltfDelta = input.timeframe("1", "Timeframe intrabar (delta y footprint)",
+     tooltip = "Marco temporal MENOR que el del gráfico. Debe ser inferior al del chart. En gráficos de 1m usa 1S (requiere segundos). Si no hay intrabars disponibles, el motor cae automáticamente al proxy OHLC.", group = gOF)
+string deltaMode = input.string("Intrabar", "Motor de delta",
+     options = ["Intrabar", "Proxy OHLC"],
+     tooltip = "Intrabar: usa precios y volumen de barras menores (más fiel). Proxy OHLC: reparte el volumen de la vela entre cuerpo y mechas (más rápido).", group = gOF)
+int   maxIB     = input.int(300, "Máx. intrabars por vela", minval = 20, maxval = 2000, group = gOF)
+int   volLen    = input.int(20, "Media de volumen", minval = 2, group = gOF)
+int   ctrlLen   = input.int(50, "Ventana de control compradores/vendedores", minval = 5, group = gOF)
+bool  resetCvd  = input.bool(true, "Reiniciar CVD por sesión", group = gOF)
+float absorbVol = input.float(1.5, "Volumen relativo de absorción", minval = 1.0, step = 0.1, group = gOF)
+
+// ── Tendencia ─────────────────────────────────────────────────────────────────
+int   diLen     = input.int(14, "DI length", minval = 1, group = gTR, inline = "adx")
+int   adxLen    = input.int(14, "ADX smoothing", minval = 1, group = gTR, inline = "adx")
+float adxMin    = input.float(20.0, "ADX mínimo de tendencia", group = gTR)
+float adxStrong = input.float(30.0, "ADX de fuerza alta", group = gTR)
+int   momLen    = input.int(12, "Momentum length", minval = 1, group = gTR)
+int   atrLen    = input.int(14, "ATR length", minval = 1, group = gTR)
+
+// ── SMC ───────────────────────────────────────────────────────────────────────
+int   pivLen    = input.int(5, "Fuerza del swing", minval = 2, maxval = 50, group = gSM)
+int   obLook    = input.int(60, "Barras para localizar el Order Block", minval = 5, maxval = 200, group = gSM)
+int   maxOB     = input.int(12, "Máx. Order Blocks", minval = 1, maxval = 40, group = gSM)
+int   obExt     = input.int(30, "Extensión del OB (barras)", minval = 2, group = gSM)
+int   maxFVG    = input.int(10, "Máx. FVG", minval = 1, maxval = 40, group = gSM)
+int   fvgExt    = input.int(25, "Extensión del FVG (barras)", minval = 2, group = gSM)
+int   rangeLen  = input.int(100, "Lookback premium/discount", minval = 10, maxval = 400, group = gSM)
+float zoneTol   = input.float(0.25, "Tolerancia de zona (x ATR)", minval = 0.0, step = 0.05, group = gSM)
+
+// ── Perfil de volumen ─────────────────────────────────────────────────────────
+bool  showVP    = input.bool(true, "Mostrar POC / VAH / VAL", group = gVP)
+int   vpBins    = input.int(24, "Bins del perfil", minval = 8, maxval = 80, group = gVP)
+int   vpLook    = input.int(150, "Barras del perfil", minval = 20, maxval = 250, group = gVP)
+float vpVA      = input.float(70.0, "Value Area %", minval = 50, maxval = 95, group = gVP)
+
+// ── Panel / decisión ──────────────────────────────────────────────────────────
+bool   showDash = input.bool(true, "Mostrar panel", group = gDS)
+string dashPos  = input.string("Top Right", "Posición del panel",
+     options = ["Top Right", "Top Left", "Middle Right", "Bottom Right", "Bottom Left"], group = gDS)
+string dashSz   = input.string("Normal", "Tamaño del texto",
+     options = ["Compacto", "Normal", "Grande"], group = gDS)
+float  strongTh = input.float(60.0, "Umbral señal fuerte", minval = 30, maxval = 95, step = 5, group = gDS)
+float  softTh   = input.float(30.0, "Umbral señal", minval = 10, maxval = 90, step = 5, group = gDS)
+bool   reqZone  = input.bool(true, "Señal fuerte solo en zona de interés", group = gDS)
+int    wTrend   = input.int(25, "Peso tendencia (EMAs)", minval = 0, maxval = 100, group = gDS)
+int    wAdx     = input.int(20, "Peso ADX", minval = 0, maxval = 100, group = gDS)
+int    wMom     = input.int(15, "Peso momentum", minval = 0, maxval = 100, group = gDS)
+int    wOF      = input.int(25, "Peso orderflow", minval = 0, maxval = 100, group = gDS)
+int    wStruct  = input.int(15, "Peso estructura", minval = 0, maxval = 100, group = gDS)
+
+// ── Footprint ─────────────────────────────────────────────────────────────────
+bool   showFP   = input.bool(false, "Activar footprint (tabla de precios)",
+     tooltip = "Dibuja el footprint de la última vela: volumen comprador/vendedor por nivel de precio, delta por fila y desequilibrios. Requiere intrabars; si no hay, no se dibuja. Actívalo o desactívalo cuando quieras.", group = gFP)
+int    fpRows   = input.int(14, "Filas de precio", minval = 5, maxval = 30, group = gFP)
+string fpPos    = input.string("Middle Right", "Posición del footprint",
+     options = ["Middle Right", "Bottom Right", "Top Right", "Middle Left", "Bottom Left"], group = gFP)
+float  fpImb    = input.float(3.0, "Ratio de desequilibrio", minval = 1.5, step = 0.5, group = gFP)
+
+// ── Sesiones Londres / Nueva York (killzones) ─────────────────────────────────
+bool   useSess   = input.bool(true, "Filtrar por sesión Londres/NY", group = gSE,
+     tooltip = "Si está activo, el score se atenúa fuera de las killzones de Londres y Nueva York y las señales FUERTES solo se permiten dentro de sesión.")
+string londonSess = input.session("0700-1100", "Killzone Londres", group = gSE, inline = "kz")
+string nySess     = input.session("1230-1600", "Killzone Nueva York", group = gSE, inline = "kz")
+string sessTZ     = input.string("Etc/UTC", "Zona horaria de las sesiones", group = gSE,
+     tooltip = "Zona horaria IANA de las killzones, p. ej. Etc/UTC, America/New_York o Europe/London.")
+float  sessPenalty = input.float(0.5, "Atenuación fuera de sesión (× score)", minval = 0.1, maxval = 1.0, step = 0.05, group = gSE)
+bool   sessBlockStrong = input.bool(true, "Solo FUERTE dentro de killzone", group = gSE,
+     tooltip = "Fuera de sesión las señales fuertes se degradan a normales aunque el score supere el umbral fuerte.")
+
+// ── Paleta del panel ──────────────────────────────────────────────────────────
+color cBg     = color.new(#0B1220, 5)
+color cBgAlt  = color.new(#131F33, 5)
+color cHead   = color.new(#1B2A4A, 0)
+color cText   = #D6DEEB
+color cMuted  = #7C8AA5
+color cBull   = #00C853
+color cBear   = #FF1744
+color cWarn   = #FFB300
+color cNeut   = #8A93A6
+color cFrame  = #2A3B5C
+color cBorder = #1E2C46
+color cNone   = color.new(#000000, 100)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  1b · PERFIL ACTIVO (score, ADX y delta por símbolo y timeframe)
+//  Auto resuelve: ticks → Forex / ticks · diario o superior → Acciones e
+//  índices · intradía ≤ 30 min → Cripto intradía · intradía mayor → Cripto swing.
+//  Los perfiles ajustan umbrales (señal fuerte/normal, ADX), pesos del score,
+//  sensibilidad del delta (coeficientes de delta %, CVD y control) y absorción.
+//  Las longitudes de cálculo (EMAs, DI/ADX, momentum, ATR, ventanas) siguen
+//  siendo las de los inputs: el perfil no las toca para no romper el warmup.
+// ═══════════════════════════════════════════════════════════════════════════════
+int   profSec  = timeframe.in_seconds(timeframe.period)
+bool  profTick = syminfo.volumetype == "tick"
+bool  profDwm  = timeframe.isdaily or timeframe.isweekly or timeframe.ismonthly or timeframe.isdwm
+string profKey = profileMode != "Auto" and profileMode != "Manual" ? profileMode : profileMode == "Manual" ? "Manual" : profTick ? "Forex / ticks" : profDwm ? "Acciones e índices" : profSec <= 1800 ? "Cripto intradía" : "Cripto swing"
+
+float effStrongTh = profKey == "Cripto intradía" ? 55.0 : profKey == "Cripto swing" ? 60.0 : profKey == "Forex / ticks" ? 50.0 : profKey == "Acciones e índices" ? 60.0 : strongTh
+float effSoftTh   = profKey == "Cripto intradía" ? 25.0 : profKey == "Cripto swing" ? 30.0 : profKey == "Forex / ticks" ? 25.0 : profKey == "Acciones e índices" ? 30.0 : softTh
+float effAdxMin   = profKey == "Cripto intradía" ? 18.0 : profKey == "Cripto swing" ? 20.0 : profKey == "Forex / ticks" ? 22.0 : profKey == "Acciones e índices" ? 22.0 : adxMin
+float effAdxStr   = profKey == "Cripto intradía" ? 28.0 : profKey == "Cripto swing" ? 30.0 : profKey == "Forex / ticks" ? 32.0 : profKey == "Acciones e índices" ? 35.0 : adxStrong
+int   effWTrend  = profKey == "Cripto intradía" ? 25 : profKey == "Cripto swing" ? 30 : profKey == "Forex / ticks" ? 30 : profKey == "Acciones e índices" ? 30 : wTrend
+int   effWAdx    = profKey == "Cripto intradía" ? 20 : profKey == "Cripto swing" ? 20 : profKey == "Forex / ticks" ? 25 : profKey == "Acciones e índices" ? 20 : wAdx
+int   effWMom    = profKey == "Cripto intradía" ? 15 : profKey == "Cripto swing" ? 15 : profKey == "Forex / ticks" ? 20 : profKey == "Acciones e índices" ? 15 : wMom
+int   effWOF     = profKey == "Cripto intradía" ? 25 : profKey == "Cripto swing" ? 20 : profKey == "Forex / ticks" ? 10 : profKey == "Acciones e índices" ? 20 : wOF
+int   effWStruct = profKey == "Cripto intradía" ? 15 : profKey == "Cripto swing" ? 15 : profKey == "Forex / ticks" ? 15 : profKey == "Acciones e índices" ? 15 : wStruct
+float effOfDK    = profKey == "Cripto intradía" ? 0.35 : profKey == "Cripto swing" ? 0.35 : profKey == "Forex / ticks" ? 0.25 : profKey == "Acciones e índices" ? 0.30 : 0.35
+float effOfCK    = profKey == "Cripto intradía" ? 2.5 : profKey == "Cripto swing" ? 2.5 : profKey == "Forex / ticks" ? 1.5 : profKey == "Acciones e índices" ? 2.0 : 2.5
+float effOfWK    = profKey == "Cripto intradía" ? 1.6 : profKey == "Cripto swing" ? 1.6 : profKey == "Forex / ticks" ? 1.0 : profKey == "Acciones e índices" ? 1.4 : 1.6
+float effAbsorb  = profKey == "Cripto intradía" ? 1.5 : profKey == "Cripto swing" ? 1.8 : profKey == "Forex / ticks" ? 1.3 : profKey == "Acciones e índices" ? 1.6 : absorbVol
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  2 · CÁLCULOS BASE
+// ═══════════════════════════════════════════════════════════════════════════════
+float atrVal   = ta.atr(atrLen)
+// tick seguro: si el símbolo no define mintick (na), math.max propagaría na a todo el panel
+float tickSafe = nz(syminfo.mintick, 1e-10)
+float barRange = math.max(high - low, tickSafe)
+float volMA    = ta.sma(volume, volLen)
+float relVol   = volMA > 0 ? volume / volMA : 0.0
+float ema1     = ta.ema(close, lenE1)
+float ema2     = ta.ema(close, lenE2)
+float ema3     = ta.ema(close, lenE3)
+float ema4     = ta.ema(close, lenE4)
+float vwapVal  = ta.vwap(hlc3)
+float vwapDist = close > 0 ? (close - vwapVal) / close * 100.0 : 0.0
+
+[diP, diM, adxVal] = ta.dmi(diLen, adxLen)
+float momVal   = ta.mom(close, momLen)
+float rocVal   = ta.roc(close, momLen)
+float momAtr   = atrVal > 0 ? momVal / atrVal : 0.0
+float atrPct   = close > 0 ? atrVal / close * 100.0 : 0.0
+float atrMA    = ta.sma(atrVal, 50)
+
+// ── Delta: intrabars con fallback a proxy OHLC ────────────────────────────────
+[ibO, ibH, ibL, ibC, ibV] = request.security_lower_tf(syminfo.tickerid, ltfDelta,
+     [open, high, low, close, volume], ignore_invalid_timeframe = true)
+
+float buyVol  = 0.0
+float sellVol = 0.0
+int   ibAvail = math.min(array.size(ibO), math.min(array.size(ibC), array.size(ibV)))
+int   ibUse   = math.min(ibAvail, maxIB)
+// con 1 solo intrabar el delta se satura a ±100 % (todo el volumen a un lado),
+// así que en ese caso usamos el proxy OHLC, que reparte cuerpo y mechas.
+bool  intrabarOk = deltaMode == "Intrabar" and ibAvail > 1
+
+if intrabarOk
+    float prevC  = open
+    int   lastSg = 0
+    for i = 0 to ibUse - 1
+        float io = array.get(ibO, i)
+        float ic = array.get(ibC, i)
+        float iv = array.get(ibV, i)
+        int   sg = ic > io ? 1 : ic < io ? -1 : ic > prevC ? 1 : ic < prevC ? -1 : lastSg
+        if sg > 0
+            buyVol += iv
+        else if sg < 0
+            sellVol += iv
+        else
+            buyVol  += iv * 0.5
+            sellVol += iv * 0.5
+        prevC  := ic
+        lastSg := sg
+else
+    // proxy OHLC: reparte el volumen entre cuerpo y mechas (reusa barRange, ya limitado por tickSafe)
+    float pBody = close - open
+    float pUp   = high - math.max(open, close)
+    float pDn   = math.min(open, close) - low
+    buyVol  := volume * (math.max(pBody, 0.0) + pDn) / barRange
+    sellVol := volume * (math.max(-pBody, 0.0) + pUp) / barRange
+
+float volTotal = buyVol + sellVol
+float deltaVal = buyVol - sellVol
+float deltaPct = volTotal > 0 ? deltaVal / volTotal * 100.0 : 0.0
+
+// ── CVD ───────────────────────────────────────────────────────────────────────
+var float cvd = 0.0
+float cvdPrev = nz(cvd[1])
+if resetCvd and timeframe.change("D")
+    cvdPrev := 0.0
+cvd := cvdPrev + deltaVal
+
+float buySum    = math.sum(buyVol, ctrlLen)
+float sellSum   = math.sum(sellVol, ctrlLen)
+float flowSum   = buySum + sellSum
+float controlPct = flowSum > 0 ? buySum / flowSum * 100.0 : 50.0
+float cvdSlopePct = flowSum > 0 ? math.sum(deltaVal, ctrlLen) / flowSum * 100.0 : 0.0
+
+// ── Absorción / calidad ───────────────────────────────────────────────────────
+float closePos   = barRange > 0 ? (close - low) / barRange : 0.5
+bool  bullAbsorb = relVol >= effAbsorb and closePos >= 0.65 and deltaVal < 0
+bool  bearAbsorb = relVol >= effAbsorb and closePos <= 0.35 and deltaVal > 0
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  3 · SMC: SWINGS, BOS/CHoCH, ORDER BLOCKS, FVG
+// ═══════════════════════════════════════════════════════════════════════════════
+float ph = ta.pivothigh(high, pivLen, pivLen)
+float pl = ta.pivotlow(low, pivLen, pivLen)
+
+var float sHigh    = na
+var int   sHighBar = na
+var float sLow     = na
+var int   sLowBar  = na
+
+if not na(ph)
+    sHigh    := ph
+    sHighBar := bar_index - pivLen
+if not na(pl)
+    sLow    := pl
+    sLowBar := bar_index - pivLen
+
+bool bosUp = ta.crossover(close, sHigh)
+bool bosDn = ta.crossunder(close, sLow)
+
+var int lastBos   = 0
+var int structure = 0
+
+bool chochUp = bosUp and lastBos == -1
+bool chochDn = bosDn and lastBos == 1
+
+if bosUp
+    lastBos   := 1
+    structure := 1
+if bosDn
+    lastBos   := -1
+    structure := -1
+
+var array<box> obBoxes = array.new<box>(0)
+var array<int> obDirs  = array.new<int>(0)
+var array<bool> obTouched = array.new<bool>(0)
+var array<bool> obMitig   = array.new<bool>(0)
+var int obTouchN   = 0
+var int obMitigN   = 0
+var int obInvalidN = 0
+var string obLastEvent = "—"
+
+if showOB and (bosUp or bosDn)
+    int swingRef = bosUp ? sLowBar : sHighBar
+    int maxBack  = math.min(obLook, bar_index)
+    int lookback = math.min(20, maxBack)
+    if not na(swingRef)
+        lookback := math.max(1, math.min(bar_index - swingRef, maxBack))
+    int obIdx = 0
+    if lookback >= 1
+        for i = 1 to lookback
+            bool opp = bosUp ? close[i] < open[i] : close[i] > open[i]
+            if opp
+                obIdx := i
+                break
+    if obIdx > 0
+        float obTop  = high[obIdx]
+        float obBot  = low[obIdx]
+        color obCol  = bosUp ? colBull : colBear
+        box   newOb  = box.new(bar_index - obIdx, obTop, bar_index + obExt, obBot,
+             border_color = color.new(obCol, 30), border_width = 1,
+             bgcolor = color.new(obCol, 88))
+        array.push(obBoxes, newOb)
+        array.push(obDirs, bosUp ? 1 : -1)
+        array.push(obTouched, false)
+        array.push(obMitig, false)
+        while array.size(obBoxes) > maxOB
+            box deadOb = array.shift(obBoxes)
+            box.delete(deadOb)
+            array.shift(obDirs)
+            array.shift(obTouched)
+            array.shift(obMitig)
+
+// ciclo de vida del OB: toque → mitigación → invalidación + limpieza automática
+// TOQUE: la mecha entra en la caja. MITIGACIÓN: tras el toque, el cierre respeta
+// el OB (alcista cierra sobre el mínimo, bajista bajo el máximo). INVALIDACIÓN:
+// cierre más allá del extremo opuesto con buffer 0.2×ATR → se borra la caja.
+// Las cajas rotas se eliminan en la misma vela; el borde derecho se extiende
+// solo para que no caduquen visualmente antes de romperse o salir por tope maxOB.
+if array.size(obBoxes) > 0
+    int jm = array.size(obBoxes) - 1
+    while jm >= 0
+        box   mb   = array.get(obBoxes, jm)
+        float mTop = box.get_top(mb)
+        float mBot = box.get_bottom(mb)
+        int   mDir = array.get(obDirs, jm)
+        bool  wasT = array.get(obTouched, jm)
+        bool  wasM = array.get(obMitig, jm)
+        color baseCol = mDir == 1 ? colBull : colBear
+        bool  touchNow = low <= mTop and high >= mBot
+        if touchNow and not wasT
+            array.set(obTouched, jm, true)
+            obTouchN += 1
+            obLastEvent := (mDir == 1 ? "OB alcista" : "OB bajista") + " tocado"
+            box.set_bgcolor(mb, color.new(baseCol, 78))
+        bool holds = mDir == 1 ? close >= mBot : close <= mTop
+        if touchNow and holds and not wasM
+            array.set(obMitig, jm, true)
+            obMitigN += 1
+            obLastEvent := (mDir == 1 ? "OB alcista" : "OB bajista") + " mitigado"
+            box.set_bgcolor(mb, color.new(baseCol, 60))
+            box.set_border_width(mb, 2)
+        bool mGone = mDir == 1 ? close < mBot - atrVal * 0.2 : close > mTop + atrVal * 0.2
+        if mGone
+            box.delete(mb)
+            array.remove(obBoxes, jm)
+            array.remove(obDirs, jm)
+            array.remove(obTouched, jm)
+            array.remove(obMitig, jm)
+            obInvalidN += 1
+            obLastEvent := (mDir == 1 ? "OB alcista" : "OB bajista") + " invalidado · limpiado"
+        else
+            if bar_index + obExt > box.get_right(mb)
+                box.set_right(mb, bar_index + obExt)
+        jm -= 1
+
+bool inBullOB = false
+bool inBearOB = false
+bool inBullTouched = false
+bool inBullMitig = false
+bool inBearTouched = false
+bool inBearMitig = false
+if array.size(obBoxes) > 0
+    float obTol = atrVal * zoneTol
+    for i = 0 to array.size(obBoxes) - 1
+        box   zb  = array.get(obBoxes, i)
+        float zTop = box.get_top(zb)
+        float zBot = box.get_bottom(zb)
+        if low <= zTop + obTol and high >= zBot - obTol
+            if array.get(obDirs, i) == 1
+                inBullOB := true
+                if array.get(obTouched, i)
+                    inBullTouched := true
+                if array.get(obMitig, i)
+                    inBullMitig := true
+            else
+                inBearOB := true
+                if array.get(obTouched, i)
+                    inBearTouched := true
+                if array.get(obMitig, i)
+                    inBearMitig := true
+string obBullSuf = inBullOB ? (inBullMitig ? " · MITIGADO" : inBullTouched ? " · TOCADO" : " · VIRGEN") : ""
+string obBearSuf = inBearOB ? (inBearMitig ? " · MITIGADO" : inBearTouched ? " · TOCADO" : " · VIRGEN") : ""
+string obStateTxt = str.tostring(array.size(obBoxes)) + "v · T" + str.tostring(obTouchN) + " M" + str.tostring(obMitigN) + " I" + str.tostring(obInvalidN)
+
+// ── FVG ───────────────────────────────────────────────────────────────────────
+var array<box> fvgBoxes = array.new<box>(0)
+var array<int> fvgDirs  = array.new<int>(0)
+
+bool bullFvg = low > high[2] and close[1] > open[1] and (low - high[2]) >= tickSafe
+bool bearFvg = high < low[2] and close[1] < open[1] and (low[2] - high) >= tickSafe
+
+if showFVG and bullFvg
+    box nfB = box.new(bar_index - 2, low, bar_index + fvgExt, high[2],
+         border_color = color.new(colBull, 45), border_width = 1,
+         bgcolor = color.new(colBull, 92))
+    array.push(fvgBoxes, nfB)
+    array.push(fvgDirs, 1)
+if showFVG and bearFvg
+    box nfS = box.new(bar_index - 2, low[2], bar_index + fvgExt, high,
+         border_color = color.new(colBear, 45), border_width = 1,
+         bgcolor = color.new(colBear, 92))
+    array.push(fvgBoxes, nfS)
+    array.push(fvgDirs, -1)
+
+while array.size(fvgBoxes) > maxFVG
+    box deadFvg = array.shift(fvgBoxes)
+    box.delete(deadFvg)
+    array.shift(fvgDirs)
+
+if array.size(fvgBoxes) > 0
+    int jf = array.size(fvgBoxes) - 1
+    while jf >= 0
+        box   fb   = array.get(fvgBoxes, jf)
+        float fTop = box.get_top(fb)
+        float fBot = box.get_bottom(fb)
+        int   fDir = array.get(fvgDirs, jf)
+        bool  fGone = fDir == 1 ? close < fBot : close > fTop
+        if fGone
+            box.delete(fb)
+            array.remove(fvgBoxes, jf)
+            array.remove(fvgDirs, jf)
+        jf -= 1
+
+bool inBullFVG = false
+bool inBearFVG = false
+if array.size(fvgBoxes) > 0
+    for i = 0 to array.size(fvgBoxes) - 1
+        box   gf  = array.get(fvgBoxes, i)
+        float gTop = box.get_top(gf)
+        float gBot = box.get_bottom(gf)
+        if low <= gTop and high >= gBot
+            if array.get(fvgDirs, i) == 1
+                inBullFVG := true
+            else
+                inBearFVG := true
+
+// ── Premium / Discount ────────────────────────────────────────────────────────
+float rangeHi   = ta.highest(high, rangeLen)
+float rangeLo   = ta.lowest(low, rangeLen)
+float rangeSpan = math.max(rangeHi - rangeLo, tickSafe)
+float rangePos  = (close - rangeLo) / rangeSpan * 100.0
+bool  discount  = rangePos <= 40.0
+bool  premium   = rangePos >= 60.0
+
+bool nearEma  = math.abs(close - ema2) <= atrVal * 0.35
+bool nearVwap = math.abs(close - vwapVal) <= atrVal * 0.5
+bool zoneBuy  = inBullOB or inBullFVG or nearVwap or (discount and nearEma)
+bool zoneSell = inBearOB or inBearFVG or nearVwap or (premium and nearEma)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  4 · MOTOR DE SCORING
+// ═══════════════════════════════════════════════════════════════════════════════
+float tScore = 0.0
+tScore += (close > ema4 ? 25.0 : -25.0)
+tScore += (ema1 > ema2 ? 25.0 : -25.0)
+tScore += (ema2 > ema3 ? 25.0 : -25.0)
+tScore += (ema3 > ema4 ? 25.0 : -25.0)
+
+float adxDir  = (diP + diM) > 0 ? (diP - diM) / (diP + diM) : 0.0
+float adxK    = math.min(adxVal / math.max(effAdxStr, 1.0), 1.0)
+float aScore  = adxDir * 100.0 * adxK
+
+float mScore = math.max(-100.0, math.min(100.0, momAtr * 40.0))
+
+float ofScore = math.max(-100.0, math.min(100.0, deltaPct * effOfDK + cvdSlopePct * effOfCK + (controlPct - 50.0) * effOfWK))
+
+float sScore = math.max(-100.0, math.min(100.0, (50.0 - rangePos) * 1.2 + structure * 40.0))
+
+float wSum = (effWTrend + effWAdx + effWMom + effWOF + effWStruct) * 1.0
+float scoreRaw = (tScore * effWTrend + aScore * effWAdx + mScore * effWMom + ofScore * effWOF + sScore * effWStruct) / math.max(wSum, 1.0)
+scoreRaw := math.max(-100.0, math.min(100.0, scoreRaw))
+
+// ── Filtro de sesiones Londres / NY ──────────────────────────────────────────
+// Las killzones se evalúan con time() en la zona horaria elegida. Fuera de
+// sesión el score se atenúa hacia cero con sessPenalty para evitar operar en
+// horas de baja liquidez. Con sessBlockStrong las señales FUERTES exigen
+// estar dentro de killzone aunque el score atenuado siga alto.
+bool inLondon = not na(time(timeframe.period, londonSess, sessTZ))
+bool inNY     = not na(time(timeframe.period, nySess, sessTZ))
+bool inKill   = not useSess or inLondon or inNY
+float sessMult = inKill ? 1.0 : sessPenalty
+bool allowStrong = inKill or not sessBlockStrong or not useSess
+float score = scoreRaw * sessMult
+score := math.max(-100.0, math.min(100.0, score))
+
+float sgn = score >= 0 ? 1.0 : -1.0
+int aligned = 0
+aligned += ((tScore * sgn) > 10.0 ? 1 : 0)
+aligned += ((aScore * sgn) > 10.0 ? 1 : 0)
+aligned += ((mScore * sgn) > 10.0 ? 1 : 0)
+aligned += ((ofScore * sgn) > 10.0 ? 1 : 0)
+aligned += ((sScore * sgn) > 10.0 ? 1 : 0)
+float confidence = aligned / 5.0 * 100.0
+
+// ── Decisión ──────────────────────────────────────────────────────────────────
+bool warmupOk = bar_index > lenE4 and not na(ema4) and not na(adxVal)
+
+string decision = "ESPERAR"
+color  decCol   = cNeut
+if not warmupOk
+    decision := "CARGANDO DATOS"
+    decCol   := cMuted
+else if score >= effStrongTh and allowStrong and (not reqZone or zoneBuy)
+    decision := "FUERTE COMPRA"
+    decCol   := cBull
+else if score <= -effStrongTh and allowStrong and (not reqZone or zoneSell)
+    decision := "FUERTE VENTA"
+    decCol   := cBear
+else if score >= effSoftTh
+    decision := "COMPRA"
+    decCol   := color.new(cBull, 20)
+else if score <= -effSoftTh
+    decision := "VENTA"
+    decCol   := color.new(cBear, 20)
+else if math.abs(score) < 15.0
+    decision := "ESPERAR · SIN VENTAJA"
+    decCol   := cWarn
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  5 · PERFIL DE VOLUMEN (POC / VAH / VAL)
+// ═══════════════════════════════════════════════════════════════════════════════
+var float pocPrice = na
+var float vahPrice = na
+var float valPrice = na
+
+float vpHi = ta.highest(high, vpLook)
+float vpLo = ta.lowest(low, vpLook)
+
+if showVP and barstate.islast
+    float vpSpan = vpHi - vpLo
+    if vpSpan > 0
+        float binSize = vpSpan / vpBins
+        array<float> prof = array.new<float>(vpBins, 0.0)
+        int vpBars = math.min(vpLook, bar_index + 1)
+        for b = 0 to vpBars - 1
+            int loBin = int(math.floor((low[b] - vpLo) / binSize))
+            int hiBin = int(math.floor((high[b] - vpLo) / binSize))
+            loBin := math.max(0, math.min(vpBins - 1, loBin))
+            hiBin := math.max(0, math.min(vpBins - 1, hiBin))
+            int span = hiBin - loBin + 1
+            float per = span > 0 ? volume[b] / span : volume[b]
+            for k = loBin to hiBin
+                array.set(prof, k, array.get(prof, k) + per)
+        int   pocIdx = 0
+        float pocMax = -1.0
+        float vpTot  = 0.0
+        for k = 0 to vpBins - 1
+            float pv = array.get(prof, k)
+            vpTot += pv
+            if pv > pocMax
+                pocMax := pv
+                pocIdx := k
+        float target = vpTot * vpVA / 100.0
+        float acc    = array.get(prof, pocIdx)
+        int   upBin  = pocIdx
+        int   dnBin  = pocIdx
+        while acc < target and (upBin < vpBins - 1 or dnBin > 0)
+            float vUp = upBin < vpBins - 1 ? array.get(prof, upBin + 1) : -1.0
+            float vDn = dnBin > 0 ? array.get(prof, dnBin - 1) : -1.0
+            if vUp >= vDn
+                upBin += 1
+                acc   += vUp
+            else
+                dnBin -= 1
+                acc   += vDn
+        pocPrice := vpLo + (pocIdx + 0.5) * binSize
+        vahPrice := vpLo + (upBin + 1) * binSize
+        valPrice := vpLo + dnBin * binSize
+
+var line lPoc = na
+var line lVah = na
+var line lVal = na
+if showVP and barstate.islast and not na(pocPrice)
+    int lx1 = bar_index - vpLook
+    int lx2 = bar_index + 40
+    if na(lPoc)
+        lPoc := line.new(lx1, pocPrice, lx2, pocPrice, color = color.new(cWarn, 0), width = 2, style = line.style_solid)
+        lVah := line.new(lx1, vahPrice, lx2, vahPrice, color = color.new(cWarn, 55), width = 1, style = line.style_dashed)
+        lVal := line.new(lx1, valPrice, lx2, valPrice, color = color.new(cWarn, 55), width = 1, style = line.style_dashed)
+    else
+        line.set_xy1(lPoc, lx1, pocPrice)
+        line.set_xy2(lPoc, lx2, pocPrice)
+        line.set_xy1(lVah, lx1, vahPrice)
+        line.set_xy2(lVah, lx2, vahPrice)
+        line.set_xy1(lVal, lx1, valPrice)
+        line.set_xy2(lVal, lx2, valPrice)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  6 · DIBUJOS EN EL GRÁFICO
+// ═══════════════════════════════════════════════════════════════════════════════
+plot(showEMA ? ema1 : na, "EMA rápida",  color = color.new(#2962FF, 0), linewidth = 1)
+plot(showEMA ? ema2 : na, "EMA media",   color = color.new(#FFB300, 0), linewidth = 1)
+plot(showEMA ? ema3 : na, "EMA lenta",   color = color.new(#AB47BC, 0), linewidth = 2)
+plot(showEMA ? ema4 : na, "EMA tendencia", color = color.new(#78909C, 0), linewidth = 2)
+plot(showVwap ? vwapVal : na, "VWAP", color = color.new(#26C6DA, 0), linewidth = 2, style = plot.style_circles)
+
+barcolor(colorBars ? (deltaVal > 0 ? color.new(colBull, 0) : deltaVal < 0 ? color.new(colBear, 0) : cNone) : cNone, title = "Color por delta")
+bgcolor(useSess and inKill ? color.new(#00C853, 92) : na, title = "Killzone Londres/NY")
+
+// datos en ventana de datos
+plot(deltaVal, "Delta", color = color.new(cBull, 0), display = display.data_window)
+plot(deltaPct, "Delta %", color = color.new(cBull, 0), display = display.data_window)
+plot(cvd, "CVD", color = color.new(#29B6F6, 0), display = display.data_window)
+plot(controlPct, "Control compradores %", display = display.data_window)
+plot(relVol, "Volumen relativo", display = display.data_window)
+plot(adxVal, "ADX", display = display.data_window)
+plot(diP, "+DI", display = display.data_window)
+plot(diM, "-DI", display = display.data_window)
+plot(momVal, "Momentum", display = display.data_window)
+plot(scoreRaw, "Score base (sin sesión)", display = display.data_window)
+plot(score, "Score cuántico", display = display.data_window)
+plot(sessMult, "Sesión mult", display = display.data_window)
+plot(inKill ? 1.0 : 0.0, "En killzone", display = display.data_window)
+plot(confidence, "Confluencia %", display = display.data_window)
+plot(array.size(obBoxes), "OB vivos", display = display.data_window)
+plot(obTouchN, "OB toques", display = display.data_window)
+plot(obMitigN, "OB mitigados", display = display.data_window)
+plot(obInvalidN, "OB invalidados", display = display.data_window)
+plot(inBullOB ? 1.0 : inBearOB ? -1.0 : 0.0, "En OB", display = display.data_window)
+plot(effStrongTh, "Perfil strong", display = display.data_window)
+plot(effSoftTh, "Perfil soft", display = display.data_window)
+plot(effAdxMin, "Perfil adxMin", display = display.data_window)
+plot(effAdxStr, "Perfil adxStrong", display = display.data_window)
+plot(effOfDK, "Perfil deltaK", display = display.data_window)
+
+// ── Etiquetas de estructura ───────────────────────────────────────────────────
+var array<label> structLabels = array.new<label>(0)
+if showBOS and bosUp
+    label sLbl = label.new(bar_index, high + atrVal * 0.35,
+         chochUp ? "CHoCH ↑" : "BOS ↑",
+         style = label.style_label_down, color = color.new(colBull, 15),
+         textcolor = color.white, size = size.tiny)
+    array.push(structLabels, sLbl)
+if showBOS and bosDn
+    label sLblD = label.new(bar_index, low - atrVal * 0.35,
+         chochDn ? "CHoCH ↓" : "BOS ↓",
+         style = label.style_label_up, color = color.new(colBear, 15),
+         textcolor = color.white, size = size.tiny)
+    array.push(structLabels, sLblD)
+while array.size(structLabels) > 80
+    label deadLbl = array.shift(structLabels)
+    label.delete(deadLbl)
+
+// ── Señales fuertes en zonas de interés ──────────────────────────────────────
+bool sigStrongBuy  = barstate.isconfirmed and warmupOk and score >= effStrongTh and allowStrong and (not reqZone or zoneBuy)
+bool sigStrongSell = barstate.isconfirmed and warmupOk and score <= -effStrongTh and allowStrong and (not reqZone or zoneSell)
+bool sigBuy        = barstate.isconfirmed and warmupOk and score >= effSoftTh and zoneBuy
+bool sigSell       = barstate.isconfirmed and warmupOk and score <= -effSoftTh and zoneSell
+
+var array<label> sigLabels = array.new<label>(0)
+if showSig and sigStrongBuy
+    label bLbl = label.new(bar_index, low - atrVal * 0.6,
+         "◆ COMPRA FUERTE  " + str.tostring(math.round(score)) + "%",
+         style = label.style_label_up, color = color.new(cBull, 5),
+         textcolor = color.black, size = size.small)
+    array.push(sigLabels, bLbl)
+if showSig and sigStrongSell
+    label sSlbl = label.new(bar_index, high + atrVal * 0.6,
+         "◆ VENTA FUERTE  " + str.tostring(math.round(math.abs(score))) + "%",
+         style = label.style_label_down, color = color.new(cBear, 5),
+         textcolor = color.white, size = size.small)
+    array.push(sigLabels, sSlbl)
+while array.size(sigLabels) > 60
+    label deadSig = array.shift(sigLabels)
+    label.delete(deadSig)
+
+alertcondition(sigStrongBuy, "QFA · Fuerte compra en zona", "QFA: FUERTE COMPRA en {{ticker}} ({{interval}})")
+alertcondition(sigStrongSell, "QFA · Fuerte venta en zona", "QFA: FUERTE VENTA en {{ticker}} ({{interval}})")
+alertcondition(sigBuy, "QFA · Compra en zona", "QFA: señal de COMPRA en {{ticker}} ({{interval}})")
+alertcondition(sigSell, "QFA · Venta en zona", "QFA: señal de VENTA en {{ticker}} ({{interval}})")
+
+// Banderas de señal exportadas para backtest (1 = señal FUERTE en esa vela).
+// Series completas (no se podan como las etiquetas) para medir nº de señales,
+// win-rate a N barras y MFE/MAE sobre datos reales.
+plot(sigStrongBuy ? 1.0 : 0.0, "SIG FUERTE COMPRA", display = display.data_window)
+plot(sigStrongSell ? 1.0 : 0.0, "SIG FUERTE VENTA", display = display.data_window)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  7 · FOOTPRINT INTRABAR (activar / desactivar)
+// ═══════════════════════════════════════════════════════════════════════════════
+string szFP = dashSz == "Compacto" ? size.tiny : dashSz == "Grande" ? size.normal : size.small
+
+string fpPosition = fpPos == "Middle Right" ? position.middle_right :
+     fpPos == "Top Right" ? position.top_right :
+     fpPos == "Bottom Right" ? position.bottom_right :
+     fpPos == "Middle Left" ? position.middle_left : position.bottom_left
+
+var table fpTable = table.new(fpPosition, 4, fpRows + 3,
+     bgcolor = cBg, frame_color = cFrame, frame_width = 1,
+     border_color = cBorder, border_width = 1)
+
+if showFP and barstate.islast
+    float fpHi = high
+    float fpLo = low
+    float fpSpan = math.max(fpHi - fpLo, tickSafe)
+    float fpStep = fpSpan / fpRows
+    array<float> rowBuy  = array.new<float>(fpRows, 0.0)
+    array<float> rowSell = array.new<float>(fpRows, 0.0)
+    int fpN = math.min(array.size(ibO), math.min(array.size(ibH), math.min(array.size(ibL), math.min(array.size(ibC), array.size(ibV)))))
+    fpN := math.min(fpN, maxIB)
+    if fpN > 0
+        for i = 0 to fpN - 1
+            float io = array.get(ibO, i)
+            float ic = array.get(ibC, i)
+            float ih = array.get(ibH, i)
+            float il = array.get(ibL, i)
+            float iv = array.get(ibV, i)
+            int rLo = int(math.floor((il - fpLo) / fpStep))
+            int rHi = int(math.floor((ih - fpLo) / fpStep))
+            rLo := math.max(0, math.min(fpRows - 1, rLo))
+            rHi := math.max(0, math.min(fpRows - 1, rHi))
+            int cnt = rHi - rLo + 1
+            float per = cnt > 0 ? iv / cnt : iv
+            bool isBuy = ic >= io
+            for k = rLo to rHi
+                if isBuy
+                    array.set(rowBuy, k, array.get(rowBuy, k) + per)
+                else
+                    array.set(rowSell, k, array.get(rowSell, k) + per)
+    float fpBuy  = 0.0
+    float fpSell = 0.0
+    int   fpPoc  = 0
+    float fpMax  = -1.0
+    for k = 0 to fpRows - 1
+        float fb = array.get(rowBuy, k)
+        float fs = array.get(rowSell, k)
+        fpBuy  += fb
+        fpSell += fs
+        if fb + fs > fpMax
+            fpMax := fb + fs
+            fpPoc := k
+    float fpDelta = fpBuy - fpSell
+    color fpDCol = fpDelta > 0 ? cBull : fpDelta < 0 ? cBear : cNeut
+    // cabecera
+    fCell(fpTable, 0, 0, "PRECIO",  cMuted, cHead, szFP, text.align_left)
+    fCell(fpTable, 1, 0, "COMPRA",  cMuted, cHead, szFP, text.align_right)
+    fCell(fpTable, 2, 0, "VENTA",   cMuted, cHead, szFP, text.align_right)
+    fCell(fpTable, 3, 0, "DELTA",   cMuted, cHead, szFP, text.align_right)
+    // filas de precio (de arriba a abajo)
+    for r = 0 to fpRows - 1
+        int   k   = fpRows - 1 - r
+        float px  = fpLo + (k + 0.5) * fpStep
+        float rb  = array.get(rowBuy, k)
+        float rs  = array.get(rowSell, k)
+        float rd  = rb - rs
+        color rBg = k == fpPoc ? color.new(#1B2A4A, 0) : (r % 2 == 0 ? cBgAlt : cBg)
+        color bgB = rb > rs * fpImb ? color.new(cBull, 82) : rBg
+        color bgS = rs > rb * fpImb ? color.new(cBear, 82) : rBg
+        color rdC = rd > 0 ? cBull : rd < 0 ? cBear : cNeut
+        string mark = rb > rs * fpImb ? " ▲" : rs > rb * fpImb ? " ▼" : ""
+        fCell(fpTable, 0, r + 1, fPx(px) + mark, cText, rBg, szFP, text.align_left)
+        fCell(fpTable, 1, r + 1, fVol(rb), cText, bgB, szFP, text.align_right)
+        fCell(fpTable, 2, r + 1, fVol(rs), cText, bgS, szFP, text.align_right)
+        fCell(fpTable, 3, r + 1, fSigV(rd), rdC, rBg, szFP, text.align_right)
+    // totales
+    fCell(fpTable, 0, fpRows + 1, "TOTAL", cMuted, cHead, szFP, text.align_left)
+    fCell(fpTable, 1, fpRows + 1, fVol(fpBuy),  cBull, cHead, szFP, text.align_right)
+    fCell(fpTable, 2, fpRows + 1, fVol(fpSell), cBear, cHead, szFP, text.align_right)
+    fCell(fpTable, 3, fpRows + 1, fSigV(fpDelta), fpDCol, cHead, szFP, text.align_right)
+    // pie
+    fCell(fpTable, 0, fpRows + 2, "FP intrabar " + ltfDelta, cMuted, cBg, szFP, text.align_left)
+    fCell(fpTable, 1, fpRows + 2, fpN > 0 ? str.tostring(fpN) + " bars" : "sin intrabar", cMuted, cBg, szFP, text.align_right)
+    fCell(fpTable, 2, fpRows + 2, "", cMuted, cBg, szFP, text.align_right)
+    fCell(fpTable, 3, fpRows + 2, "POC ▲", cWarn, cBg, szFP, text.align_right)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  8 · PANEL / DASHBOARD
+// ═══════════════════════════════════════════════════════════════════════════════
+string szD  = dashSz == "Compacto" ? size.tiny : dashSz == "Grande" ? size.normal : size.small
+string szDL = dashSz == "Grande" ? size.normal : size.small
+
+string dashPosition = dashPos == "Top Right" ? position.top_right :
+     dashPos == "Top Left" ? position.top_left :
+     dashPos == "Middle Right" ? position.middle_right :
+     dashPos == "Bottom Right" ? position.bottom_right : position.bottom_left
+
+var table dash = table.new(dashPosition, 4, 29,
+     bgcolor = cBg, frame_color = cFrame, frame_width = 1,
+     border_color = cBorder, border_width = 1)
+
+// ── textos derivados ─────────────────────────────────────────────────────────
+string volState  = relVol >= 1.5 ? "ALTO" : relVol <= 0.7 ? "BAJO" : "NORMAL"
+color  volCol    = relVol >= 1.5 ? cWarn : relVol <= 0.7 ? cMuted : cText
+string deltaState = deltaPct > 10.0 ? "COMPRA" : deltaPct < -10.0 ? "VENTA" : "NEUTRO"
+color  deltaCol   = deltaPct > 10.0 ? cBull : deltaPct < -10.0 ? cBear : cNeut
+string cvdState  = cvdSlopePct > 2.0 ? "ACUMULANDO" : cvdSlopePct < -2.0 ? "DISTRIBUYENDO" : "PLANO"
+color  cvdCol    = cvdSlopePct > 2.0 ? cBull : cvdSlopePct < -2.0 ? cBear : cNeut
+bool   buyersInControl = controlPct >= 50.0
+string ctrlTxt   = buyersInControl ? "COMPRADORES" : "VENDEDORES"
+color  ctrlCol   = buyersInControl ? cBull : cBear
+string absorbTxt = bullAbsorb ? "Compradores absorben venta (soporte activo)" : bearAbsorb ? "Vendedores absorben compra (resistencia activa)" : "Sin absorción relevante"
+color  absorbCol = bullAbsorb ? cBull : bearAbsorb ? cBear : cMuted
+string adxState  = adxVal >= effAdxStr ? "MUY FUERTE" : adxVal >= effAdxMin ? "FUERTE" : "DÉBIL / RANGO"
+color  adxCol    = adxVal >= adxStrong ? cBull : adxVal >= adxMin ? cWarn : cNeut
+string momState  = momVal > atrVal * 0.1 ? "ALCISTA" : momVal < -atrVal * 0.1 ? "BAJISTA" : "NEUTRO"
+color  momCol    = momVal > atrVal * 0.1 ? cBull : momVal < -atrVal * 0.1 ? cBear : cNeut
+string emaState  = (ema1 > ema2 and ema2 > ema3 and ema3 > ema4) ? "ALINEADAS ↑" : (ema1 < ema2 and ema2 < ema3 and ema3 < ema4) ? "ALINEADAS ↓" : "MIXTAS"
+color  emaCol    = (ema1 > ema2 and ema2 > ema3 and ema3 > ema4) ? cBull : (ema1 < ema2 and ema2 < ema3 and ema3 < ema4) ? cBear : cNeut
+string structTxt = structure == 1 ? "BOS alcista" : structure == -1 ? "BOS bajista" : "Sin ruptura"
+color  structCol = structure == 1 ? cBull : structure == -1 ? cBear : cNeut
+string zoneTxt   = inBullOB ? "Order Block ALCISTA" + obBullSuf + " (" + obStateTxt + ")" : inBearOB ? "Order Block BAJISTA" + obBearSuf + " (" + obStateTxt + ")" : inBullFVG ? "FVG alcista · OB " + obStateTxt : inBearFVG ? "FVG bajista · OB " + obStateTxt : discount ? "Discount (" + str.tostring(rangePos, "#") + "%) · OB " + obStateTxt : premium ? "Premium (" + str.tostring(rangePos, "#") + "%) · OB " + obStateTxt : "Fuera de zona · OB " + obStateTxt
+color  zoneCol   = (inBullOB or inBullFVG) ? cBull : (inBearOB or inBearFVG) ? cBear : cMuted
+string locTxt    = discount ? "DISCOUNT" : premium ? "PREMIUM" : "EQUILIBRIO"
+color  locCol    = discount ? cBull : premium ? cBear : cNeut
+string vwapState = close > vwapVal ? "ENCIMA" : "DEBAJO"
+color  vwapCol   = close > vwapVal ? cBull : cBear
+string vpState   = na(pocPrice) ? "—" : str.tostring(pocPrice, format.mintick) + " / " + str.tostring(vahPrice, format.mintick) + " / " + str.tostring(valPrice, format.mintick)
+string volTypeTxt = syminfo.volumetype == "base" ? "VOL REAL" : syminfo.volumetype == "quote" ? "VOL QUOTE" : "TICK VOL"
+color  volTypeCol = syminfo.volumetype == "tick" ? cWarn : cText
+string atrRegime = atrVal > atrMA * 1.2 ? "EXPANSIÓN" : atrVal < atrMA * 0.8 ? "COMPRESIÓN" : "ESTABLE"
+color  atrCol    = atrRegime == "EXPANSIÓN" ? cWarn : atrRegime == "COMPRESIÓN" ? cNeut : cText
+string quality   = confidence >= 80.0 and relVol >= 1.0 ? "ALTA" : confidence >= 60.0 ? "MEDIA" : "BAJA"
+color  qualCol   = quality == "ALTA" ? cBull : quality == "MEDIA" ? cWarn : cBear
+string biasTxt   = score >= effSoftTh ? "VENTAJA COMPRADORA" : score <= -effSoftTh ? "VENTAJA VENDEDORA" : "SIN VENTAJA"
+float barChange  = open > 0 ? (close - open) / open * 100.0 : 0.0
+string clockTxt  = str.format_time(time, "dd/MM HH:mm", syminfo.timezone)
+string sessTxt   = not useSess ? "FILTRO OFF" : inLondon and inNY ? "LONDRES + NUEVA YORK" : inLondon ? "LONDRES" : inNY ? "NUEVA YORK" : "FUERA DE SESIÓN ×" + str.tostring(sessPenalty, "#.##")
+color  sessCol   = not useSess ? cMuted : inKill ? cBull : cWarn
+string sessDetail = not useSess ? "score sin atenuar" : inKill ? "killzone activa · score ×1" : "score ×" + str.tostring(sessPenalty, "#.##") + " · FUERTE bloqueado" + (sessBlockStrong ? "" : " (permitido)")
+
+var bool dashInit = false
+
+if showDash and barstate.islast
+    if not dashInit
+        table.merge_cells(dash, 0, 0, 3, 0)
+        table.merge_cells(dash, 0, 3, 3, 3)
+        table.merge_cells(dash, 1, 8, 3, 8)
+        table.merge_cells(dash, 0, 9, 3, 9)
+        table.merge_cells(dash, 0, 14, 3, 14)
+        table.merge_cells(dash, 1, 15, 3, 15)
+        table.merge_cells(dash, 1, 18, 3, 18)
+        table.merge_cells(dash, 0, 19, 3, 19)
+        table.merge_cells(dash, 0, 23, 3, 23)
+        table.merge_cells(dash, 0, 26, 3, 26)
+        table.merge_cells(dash, 0, 27, 3, 27)
+        table.merge_cells(dash, 0, 28, 3, 28)
+        dashInit := true
+
+    // 0 · cabecera
+    fCell(dash, 0, 0, "⚛ QUANTUM FLOW ANALYZER · v6 │ " + profKey, cText, cHead, szDL, text.align_center)
+    // 1 · activo
+    fCell(dash, 0, 1, "ACTIVO",  cMuted, cBg, szD, text.align_left)
+    fCell(dash, 1, 1, syminfo.ticker, cText, cBg, szD, text.align_left)
+    fCell(dash, 2, 1, timeframe.period, cText, cBg, szD, text.align_left)
+    fCell(dash, 3, 1, volTypeTxt, volTypeCol, cBg, szD, text.align_right)
+    // 2 · precio
+    fCell(dash, 0, 2, "PRECIO", cMuted, cBgAlt, szD, text.align_left)
+    fCell(dash, 1, 2, fPx(close), cText, cBgAlt, szD, text.align_left)
+    fCell(dash, 2, 2, fSig2(barChange) + "%", barChange >= 0 ? cBull : cBear, cBgAlt, szD, text.align_left)
+    fCell(dash, 3, 2, clockTxt, cMuted, cBgAlt, szD, text.align_right)
+    // 3 · sección
+    fCell(dash, 0, 3, "▌ VOLUMEN & ORDERFLOW", cText, cHead, szDL, text.align_left)
+    // 4 · volumen
+    fCell(dash, 0, 4, "Volumen", cMuted, cBg, szD, text.align_left)
+    fCell(dash, 1, 4, fVol(volume), cText, cBg, szD, text.align_left)
+    fCell(dash, 2, 4, str.tostring(relVol, "#.##") + "x media", cMuted, cBg, szD, text.align_left)
+    fCell(dash, 3, 4, volState, volCol, cBg, szD, text.align_right)
+    // 5 · delta
+    fCell(dash, 0, 5, "Delta vela", cMuted, cBgAlt, szD, text.align_left)
+    fCell(dash, 1, 5, fSigV(deltaVal), deltaCol, cBgAlt, szD, text.align_left)
+    fCell(dash, 2, 5, fSig1(deltaPct) + "%", deltaCol, cBgAlt, szD, text.align_left)
+    fCell(dash, 3, 5, deltaState, deltaCol, cBgAlt, szD, text.align_right)
+    // 6 · CVD
+    fCell(dash, 0, 6, "CVD sesión", cMuted, cBg, szD, text.align_left)
+    fCell(dash, 1, 6, fVol(cvd), cvdCol, cBg, szD, text.align_left)
+    fCell(dash, 2, 6, fSig1(cvdSlopePct) + "%", cvdCol, cBg, szD, text.align_left)
+    fCell(dash, 3, 6, cvdState, cvdCol, cBg, szD, text.align_right)
+    // 7 · control
+    fCell(dash, 0, 7, "Control", cMuted, cBgAlt, szD, text.align_left)
+    fCell(dash, 1, 7, ctrlTxt, ctrlCol, cBgAlt, szD, text.align_left)
+    fCell(dash, 2, 7, fBar((controlPct - 50.0) * 2.0, 8), ctrlCol, cBgAlt, szD, text.align_left)
+    fCell(dash, 3, 7, str.tostring(controlPct, "#.#") + "%", ctrlCol, cBgAlt, szD, text.align_right)
+    // 8 · absorción
+    fCell(dash, 0, 8, "Absorción", cMuted, cBg, szD, text.align_left)
+    fCell(dash, 1, 8, absorbTxt, absorbCol, cBg, szD, text.align_left)
+    // 9 · sección
+    fCell(dash, 0, 9, "▌ TENDENCIA & MOMENTUM", cText, cHead, szDL, text.align_left)
+    // 10 · ADX
+    fCell(dash, 0, 10, "ADX", cMuted, cBg, szD, text.align_left)
+    fCell(dash, 1, 10, str.tostring(adxVal, "#.#"), adxCol, cBg, szD, text.align_left)
+    fCell(dash, 2, 10, "+" + str.tostring(diP, "#.#") + " / -" + str.tostring(diM, "#.#"), cMuted, cBg, szD, text.align_left)
+    fCell(dash, 3, 10, adxState, adxCol, cBg, szD, text.align_right)
+    // 11 · momentum
+    fCell(dash, 0, 11, "Momentum", cMuted, cBgAlt, szD, text.align_left)
+    fCell(dash, 1, 11, fPx(momVal), momCol, cBgAlt, szD, text.align_left)
+    fCell(dash, 2, 11, fSig2(rocVal) + "%", momCol, cBgAlt, szD, text.align_left)
+    fCell(dash, 3, 11, momState, momCol, cBgAlt, szD, text.align_right)
+    // 12 · EMAs
+    fCell(dash, 0, 12, "EMAs", cMuted, cBg, szD, text.align_left)
+    fCell(dash, 1, 12, str.tostring(lenE1) + "/" + str.tostring(lenE2) + "/" + str.tostring(lenE3) + "/" + str.tostring(lenE4), cText, cBg, szD, text.align_left)
+    fCell(dash, 2, 12, "Precio vs EMA" + str.tostring(lenE4) + ": " + fSig2(close > 0 ? (close - ema4) / close * 100.0 : 0.0) + "%", cMuted, cBg, szD, text.align_left)
+    fCell(dash, 3, 12, emaState, emaCol, cBg, szD, text.align_right)
+    // 13 · estructura
+    fCell(dash, 0, 13, "Estructura", cMuted, cBgAlt, szD, text.align_left)
+    fCell(dash, 1, 13, structTxt, structCol, cBgAlt, szD, text.align_left)
+    fCell(dash, 2, 13, "Swings " + str.tostring(pivLen), cMuted, cBgAlt, szD, text.align_left)
+    fCell(dash, 3, 13, structure == 1 ? "ALZA" : structure == -1 ? "BAJA" : "RANGO", structCol, cBgAlt, szD, text.align_right)
+    // 14 · sección
+    fCell(dash, 0, 14, "▌ ZONAS & SMC", cText, cHead, szDL, text.align_left)
+    // 15 · zona actual
+    fCell(dash, 0, 15, "Zona", cMuted, cBg, szD, text.align_left)
+    fCell(dash, 1, 15, zoneTxt, zoneCol, cBg, szD, text.align_left)
+    // 16 · ubicación rango
+    fCell(dash, 0, 16, "Rango", cMuted, cBgAlt, szD, text.align_left)
+    fCell(dash, 1, 16, locTxt, locCol, cBgAlt, szD, text.align_left)
+    fCell(dash, 2, 16, str.tostring(rangePos, "#") + "%", cMuted, cBgAlt, szD, text.align_left)
+    fCell(dash, 3, 16, "EQ 50%", cNeut, cBgAlt, szD, text.align_right)
+    // 17 · VWAP
+    fCell(dash, 0, 17, "VWAP", cMuted, cBg, szD, text.align_left)
+    fCell(dash, 1, 17, fPx(vwapVal), cText, cBg, szD, text.align_left)
+    fCell(dash, 2, 17, fSig2(vwapDist) + "%", vwapCol, cBg, szD, text.align_left)
+    fCell(dash, 3, 17, vwapState, vwapCol, cBg, szD, text.align_right)
+    // 18 · POC / VAH / VAL
+    fCell(dash, 0, 18, "POC/VAH/VAL", cMuted, cBgAlt, szD, text.align_left)
+    fCell(dash, 1, 18, vpState, cWarn, cBgAlt, szD, text.align_left)
+    // 19 · sección
+    fCell(dash, 0, 19, "▌ VOLATILIDAD & RIESGO", cText, cHead, szDL, text.align_left)
+    // 20 · ATR
+    fCell(dash, 0, 20, "ATR", cMuted, cBg, szD, text.align_left)
+    fCell(dash, 1, 20, fPx(atrVal), cText, cBg, szD, text.align_left)
+    fCell(dash, 2, 20, str.tostring(atrPct, "#.##") + "% del precio", cMuted, cBg, szD, text.align_left)
+    fCell(dash, 3, 20, atrRegime, atrCol, cBg, szD, text.align_right)
+    // 21 · stops ATR
+    fCell(dash, 0, 21, "Stop 1.5 ATR", cMuted, cBgAlt, szD, text.align_left)
+    fCell(dash, 1, 21, fPx(close - atrVal * 1.5), cBull, cBgAlt, szD, text.align_left)
+    fCell(dash, 2, 21, fPx(close + atrVal * 1.5), cBear, cBgAlt, szD, text.align_left)
+    fCell(dash, 3, 21, "long / short", cMuted, cBgAlt, szD, text.align_right)
+    // 22 · calidad
+    fCell(dash, 0, 22, "Calidad", cMuted, cBg, szD, text.align_left)
+    fCell(dash, 1, 22, str.tostring(confidence, "#") + "% confluencia", cText, cBg, szD, text.align_left)
+    fCell(dash, 2, 22, str.tostring(aligned) + "/5 factores", cMuted, cBg, szD, text.align_left)
+    fCell(dash, 3, 22, quality, qualCol, cBg, szD, text.align_right)
+    // 23 · sección
+    fCell(dash, 0, 23, "▌ DECISIÓN CUÁNTICA", cText, cHead, szDL, text.align_left)
+    // 24 · sesión Londres / NY
+    fCell(dash, 0, 24, "Sesión LON/NY", cMuted, cBg, szD, text.align_left)
+    fCell(dash, 1, 24, sessTxt, sessCol, cBg, szD, text.align_left)
+    fCell(dash, 2, 24, sessDetail, cMuted, cBg, szD, text.align_left)
+    fCell(dash, 3, 24, inKill ? "EN SESIÓN" : "ATENÚA", sessCol, cBg, szD, text.align_right)
+    // 25 · score (ya atenuado fuera de sesión)
+    fCell(dash, 0, 25, "Score", cMuted, cBgAlt, szD, text.align_left)
+    fCell(dash, 1, 25, fSig0(score) + " / 100", score >= 0 ? cBull : cBear, cBgAlt, szD, text.align_left)
+    fCell(dash, 2, 25, fBar(score, 10), score >= 0 ? cBull : cBear, cBgAlt, szD, text.align_left)
+    fCell(dash, 3, 25, biasTxt, score >= effSoftTh ? cBull : score <= -effSoftTh ? cBear : cNeut, cBgAlt, szD, text.align_right)
+    // 26 · decisión
+    fCell(dash, 0, 26, decision, color.white, decCol, szDL, text.align_center)
+    // 27 · motivo
+    fCell(dash, 0, 27, zoneTxt + " · " + ctrlTxt + " " + str.tostring(controlPct, "#") + "% · ADX " + str.tostring(adxVal, "#") + " · " + momState + " · " + sessTxt + " · " + obLastEvent, cMuted, cBgAlt, szD, text.align_center)
+    // 28 · pie
+    fCell(dash, 0, 28, "Delta/FP estimados por intrabars · No es asesoramiento financiero", cNeut, cBg, szD, text.align_center)
