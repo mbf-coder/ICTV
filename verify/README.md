@@ -18,3 +18,38 @@ lanzarlo igual que el CI en local: `PYTHON=python3 NO_COLOR=1 bash verify/verify
 | `selftest_lint.py` | Inyecta 18 defectos conocidos y comprueba que el lint los detecta (evita un validador vacuo). |
 | `verify_runtime.mjs` | 12 escenarios con PineTS (LuxAlgo): 5 sobre 600 barras sintéticas (plots, panel de 29 filas, footprint ON/OFF, proxy, todo apagado, warmup) + presupuesto de objetos TV (labels/boxes/lines/tablas bajo el 80 % del límite) + perfiles por símbolo/timeframe (los 5 compilan en sintético con sus umbrales) + 2 con datos reales de Binance (BTCUSDT 15m: delta con ~15 intrabars por vela, cero NaN post-warmup, `VOL REAL`, footprint) + cada perfil contra datos reales (BTCUSDT 15m, N=250; se omiten con SKIP si no hay red) + filtro de sesiones Londres/NY (OFF, fuera de sesión y en sesión) + ciclo de vida del OB (toque → mitigación → invalidación + limpieza automática) + backtest mínimo de señales FUERTE (nº, win-rate a H=10 y MFE/MAE; sintético determinista + BTCUSDT 15m N=500 con SKIP sin red). |
 | `check_features.py` | Checklist de los 36 requisitos funcionales de la misión (incluye perfiles por símbolo/timeframe, filtro de sesiones, ciclo de vida del OB con toque/mitigación/invalidación/limpieza y banderas SIG FUERTE para backtest). |
+
+## Falsos positivos encontrados (y por qué se corrigió el validador, no el script)
+
+Durante el desarrollo el lint marcó tres cosas que **no** eran errores del `.pine`. Se corrigió el
+validador, no el indicador:
+
+1. **`array.new<type>` “no existe”.** La referencia documenta la forma genérica
+   `array.new<type>(size, initial_value) → array<type>`
+   ([v6 · array.new<type>](https://www.tradingview.com/pine-script-reference/v6/#fun_array.new%3Ctype%3E)).
+   El parser de la base de firmas no aceptaba `<…>` en el nombre; ahora lo normaliza a `array.new`.
+2. **`line.new(x1, y1, x2, y2, …)` tratado como receptor de línea.** La referencia tiene dos
+   sobrecargas: `line.new(first_point, second_point, …)` y `line.new(x1, y1, x2, y2, …)`
+   ([v6 · line.new](https://www.tradingview.com/pine-script-reference/v6/#fun_line.new)).
+   El primer argumento son coordenadas, no un id, así que la comprobación de tipo de receptor ahora
+   sólo aplica a funciones cuyo primer parámetro es `table_id`/`id`/`array_id`… (nunca a `*.new`).
+3. **`fb` tipado como `float` cuando era un `box`.** El script declara `box fb` dentro del bloque de
+   FVG y `float fb` dentro del bucle del footprint: son variables distintas porque Pine usa ámbitos
+   locales por bloque ([v6 · Variable declarations](https://www.tradingview.com/pine-script-docs/language/variable-declarations/)).
+   El lint guarda ahora la línea de cada declaración y resuelve por la más cercana anterior al uso.
+
+## Límites conocidos del lint
+
+- La referencia no marca de forma fiable los parámetros obligatorios, así que la aridad mínima se
+  comprueba con una tabla curada (`MIN_ARGS`) para ~60 funciones; el máximo posicional y los nombres
+  de argumentos sí se validan contra las 475 firmas.
+- Los valores enum se validan de forma directa o por inicializador de variable; una expresión
+  arbitraria se deja pasar (no es un error) para no generar falsos positivos.
+- No hace inferencia completa de tipos ni análisis de flujo de datos: sólo receptores
+  (`table/box/line/label/array/matrix/map`), formatos de `str.tostring` y enums documentados.
+
+## Qué no se puede verificar aquí
+
+El compilador propietario de TradingView. PineTS es un runtime independiente (experimental para v6
+nativo) y no garantiza el 100 % de paridad con el motor de TradingView. El paso que queda fuera del
+sandbox es pegar el archivo en el Pine Editor y pulsar *Guardar*.
