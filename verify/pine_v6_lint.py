@@ -337,3 +337,70 @@ class Linter:
                 if re.match(r"\s*:=", rest):
                     continue
                 self.add("W001", idx + 1, f"identificador no declarado: '{name}'", severity="warning")
+
+    def run(self):
+        self.call_count = 0
+        self.check_header()
+        self.check_indentation()
+        self.check_calls()
+        self.check_v6_rules()
+        self.check_structure()
+        self.check_contracts()
+        self.check_identifiers()
+        return self.findings
+
+    def check_header(self):
+        first = self.raw.split("\n", 1)[0].strip()
+        if first != "//@version=6":
+            self.add("S001", 1, f'la primera línea debe ser "//@version=6" (encontrado: {first!r})')
+        decls = re.findall(r"^(indicator|strategy|library)\s*\(", self.raw, re.M)
+        if len(decls) != 1:
+            self.add("S002", 1, f"debe haber exactamente una declaración global indicator/strategy/library (hay {len(decls)})")
+
+    def check_indentation(self):
+        depth = 0
+        prev_code = ""
+        for idx, raw in enumerate(self.masked.split("\n")):
+            code = strip_comment(raw)
+            if not code.strip():
+                continue
+            if depth == 0 and not prev_code.rstrip().endswith(("?", ":", ",", "+", "-", "*", "/", "=", "and", "or")):
+                indent = len(code) - len(code.lstrip(" "))
+                if indent % 4 != 0:
+                    self.add("S003", idx + 1, f"indentación {indent} no es múltiplo de 4")
+            depth += code.count("(") + code.count("[") - code.count(")") - code.count("]")
+            if depth < 0:
+                self.add("S004", idx + 1, "paréntesis/corchetes desbalanceados (cierre de más)")
+                depth = 0
+            prev_code = code
+
+    RECEIVERS = {"table": "table", "box": "box", "label": "label", "line": "line",
+                 "array": "array", "matrix": "matrix", "map": "map"}
+    # primer parámetro que identifica al objeto receptor (no aplica a *.new)
+    OBJ_FIRST = {"table_id", "id", "array_id", "matrix_id", "map_id"}
+
+    def resolve_type(self, ident, line):
+        entries = self.type_decls.get(ident)
+        if not entries:
+            return None
+        before = [e for e in entries if e[0] <= line]
+        if not before:
+            return None
+        before.sort(key=lambda e: (e[0], e[1]))
+        return before[-1][2]
+
+    def check_receiver_type(self, name, pos, ln):
+        ns = name.split(".")[0]
+        expected = self.RECEIVERS.get(ns)
+        if not expected or not pos:
+            return
+        params = self.functions[name]["params"]
+        if not params or params[0] not in self.OBJ_FIRST:
+            return  # p. ej. box.new(left, top, ...) no recibe un id
+        target = pos[0].strip()
+        if not re.fullmatch(r"[A-Za-z_]\w*", target):
+            return
+        got = self.resolve_type(target, ln)
+        if got is None or got == expected:
+            return
+        self.add("T210", ln, f"{name}(): '{target}' es de tipo '{got}' y se espera un '{expected}'")
