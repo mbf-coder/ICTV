@@ -1,0 +1,214 @@
+            seen_named = False
+            for kind, key, _val in order:
+                if kind == "named":
+                    seen_named = True
+                elif seen_named:
+                    self.add("S012", ln, f"argumento posicional después de uno nombrado en {name}()")
+
+            if len(pos) > spec["max_positional"]:
+                self.add("S013", ln,
+                         f"demasiados argumentos posicionales en {name}(): {len(pos)} > {spec['max_positional']}")
+
+            valid_params = set(spec["params"])
+            for pname in named:
+                if pname not in valid_params:
+                    if pname == "transp":
+                        self.add("V101", ln,
+                                 f"{name}() no acepta transp= en v6; usa color.new(color, transp)")
+                    elif pname == "when":
+                        self.add("V102", ln, f"{name}() no acepta when= en v6")
+                    else:
+                        self.add("S014", ln, f"argumento inexistente en {name}(): '{pname}' no es parámetro v6")
+
+            if len(args) < MIN_ARGS.get(name, 1):
+                self.add("S015", ln, f"{name}() requiere al menos {MIN_ARGS.get(name, 1)} argumento(s)")
+
+            # valores enum documentados
+            for pname, pval in named.items():
+                allowed = spec["enums"].get(pname)
+                if not allowed:
+                    continue
+                if not self.resolves_to(pval, allowed):
+                    if re.fullmatch(r"[A-Za-z_]\w*", pval.strip()):
+                        continue  # puede venir de un parámetro de función: lo cubre check_contracts
+                    self.add("T206", ln,
+                             f"{name}({pname} = {pval}): valor no documentado; permitidos {allowed}")
+            # posición 0 con enum (p. ej. table.new(position, ...))
+            if spec["enums"] and pos:
+                first_param = spec["params"][0]
+                allowed = spec["enums"].get(first_param)
+                if allowed and not self.resolves_to(pos[0], allowed):
+                    if not re.fullmatch(r"[A-Za-z_]\w*", pos[0].strip()):
+                        self.add("T206", ln,
+                                 f"{name}({first_param} = {pos[0]}): valor no documentado; permitidos {allowed}")
+
+    def check_contracts(self):
+        """fCell(...) recibe el tamaño y la alineación como parámetros; valida que
+        cada llamada pase constantes size.* / text.align_*."""
+        for fname, params in self.user_funcs.items():
+            contracts = []
+            # contratos: argumentos nombrados de funciones v6 cuyo valor es un parámetro
+            body_re = re.compile(
+                r"(table\.cell|table\.new|label\.new|line\.new|box\.new)\(([^;]*)\)")
+            for idx, raw in enumerate(self.lines):
+                for m in body_re.finditer(raw):
+                    callee, argtext = m.group(1), m.group(2)
+                    spec = self.functions.get(callee)
+                    if not spec:
+                        continue
+                    _p, named, _o, _d = classify_args(split_args(argtext))
+                    for pname, pval in named.items():
+                        allowed = spec["enums"].get(pname)
+                        if allowed and pval.strip() in params:
+                            contracts.append((callee, pname, pval.strip(), allowed))
+            if not contracts:
+                continue
+            for idx, raw in enumerate(self.lines):
+                for m in re.finditer(rf"(?<![\w.]){re.escape(fname)}\s*\(", raw):
+                    open_idx = m.end() - 1
+                    depth, i = 0, open_idx
+                    while i < len(raw):
+                        if raw[i] == "(":
+                            depth += 1
+                        elif raw[i] == ")":
+                            depth -= 1
+                            if depth == 0:
+                                break
+                        i += 1
+                    argtext = raw[open_idx + 1:i]
+                    args = split_args(argtext)
+                    pos, named, _o, _d = classify_args(args)
+                    for callee, pname, pval, allowed in contracts:
+                        pidx = params.index(pval)
+                        value = None
+                        if pval in named:
+                            value = named[pval]
+                        elif pidx < len(pos):
+                            value = pos[pidx]
+                        if value is None:
+                            continue
+                        if not self.resolves_to(value, allowed):
+                            if re.fullmatch(r"[A-Za-z_]\w*", value.strip()):
+                                continue
+                            self.add("T207", idx + 1,
+                                     f"{fname}(): '{value}' no es un valor válido para {callee}({pname}); "
+                                     f"permitidos {allowed}")
+
+    def check_v6_rules(self):
+        for idx, raw in enumerate(self.masked.split("\n")):
+            line = strip_comment(raw)
+            ln = idx + 1
+
+            if re.search(r"(?<![\w.])(study|security)\s*\(", line):
+                self.add("V103", ln, "study()/security() son obsoletos; usa indicator()/request.security()")
+
+            for m in re.finditer(r"\bna\s*\(\s*([A-Za-z_]\w*)\s*\)", line):
+                if m.group(1) in self.bool_vars:
+                    self.add("V104", ln, f"na() sobre el bool '{m.group(1)}': en v6 un bool no puede ser na")
+            if re.search(r"(==|!=)\s*na\b", line):
+                self.add("V105", ln, "comparación con na: en v6 usa la función na(x)")
+
+            m = re.match(r"^\s*(if|while)\s+(.+)$", line)
+            if m:
+                cond = m.group(2).strip()
+                if re.fullmatch(r"[-+]?\d+(\.\d+)?", cond):
+                    self.add("V106", ln, f"condición numérica implícita en '{m.group(1)} {cond}': v6 exige un bool")
+
+            m = re.match(r"^\s*(?:var|varip)\s+([A-Za-z_]\w*)\s*=\s*na\s*$", line)
+            if m:
+                self.add("V107", ln,
+                         f"'{m.group(1)}' se inicializa en na sin tipo explícito; declara float/int/label/line/etc.")
+
+            if re.search(r"str\.tostring\s*\(\s*[^,()]+,\s*([^)]+)\)", line):
+                for m2 in re.finditer(r"str\.tostring\s*\(\s*([^,()]+(?:\([^)]*\))?[^,()]*),\s*([^)]+)\)", line):
+                    fmt = m2.group(2).strip()
+                    if not (fmt.startswith('"') or fmt.startswith("format.")):
+                        self.add("T201", ln,
+                                 f"str.tostring(..., {fmt}): el formato debe ser literal o constante format.*")
+
+    def check_structure(self):
+        # plot/barcolor/alertcondition/hline/fill en ámbito local
+        for idx, raw in enumerate(self.masked.split("\n")):
+            code = strip_comment(raw)
+            if not code.strip():
+                continue
+            indent = len(code) - len(code.lstrip(" "))
+            s = code.strip()
+            if indent > 0 and re.match(r"(plot|plotshape|plotchar|plotcandle|plotbar|barcolor|bgcolor|alertcondition|hline|fill)\s*\(", s):
+                self.add("R301", idx + 1, f"{s.split('(')[0]}() debe llamarse en el ámbito global")
+
+        plots = len(re.findall(r"^\s*plot\s*\(", self.raw, re.M))
+        if plots > 64:
+            self.add("R302", 1, f"demasiados plot(): {plots} > 64")
+        reqs = len(re.findall(r"request\.", self.raw))
+        if reqs > 40:
+            self.add("R303", 1, f"demasiadas llamadas request.*: {reqs} > 40")
+
+        # := a variable no declarada
+        for idx, raw in enumerate(self.masked.split("\n")):
+            code = strip_comment(raw)
+            for m in re.finditer(r"(?<![\w.])([A-Za-z_]\w*)\s*:=", code):
+                name = m.group(1)
+                if name not in self.declared and name not in self.user_funcs:
+                    self.add("R304", idx + 1, f"asignación ':=' a variable no declarada: {name}")
+
+        # arrays de intrabars sin comprobación de tamaño
+        for arr in self.intrabar_arrays:
+            uses = len(re.findall(rf"array\.(?:size|get)\s*\(\s*{re.escape(arr)}\b", self.raw))
+            sizes = len(re.findall(rf"array\.size\s*\(\s*{re.escape(arr)}\b", self.raw))
+            if uses and not sizes:
+                self.add("T208", 1,
+                         f"el array intrabar '{arr}' se indexa sin comprobar array.size (puede venir vacío)")
+
+        # request.security_lower_tf debe recibir una tupla
+        for idx, raw in enumerate(self.lines):
+            if "request.security_lower_tf" not in raw:
+                continue
+            m = re.search(r"request\.security_lower_tf\s*\((.*)", raw)
+            if m:
+                args = split_args(m.group(1).rstrip(")\n"))
+                if len(args) >= 3 and not args[2].lstrip().startswith("["):
+                    self.add("T209", idx + 1,
+                             "el 3.er argumento de request.security_lower_tf debe ser una tupla: [open, high, low, close, volume]")
+
+        # funciones de usuario: parámetros duplicados / uso de tables fuera de ámbito
+        for name, params in self.user_funcs.items():
+            if len(params) != len(set(params)):
+                self.add("R305", 1, f"función {name}(): parámetros duplicados")
+
+    # ── informe ──────────────────────────────────────────────────────────────
+    def report(self):
+        errors = [f for f in self.findings if f.severity == "error"]
+        warns = [f for f in self.findings if f.severity != "error"]
+        cats = {}
+        for f in errors:
+            cats[f.code] = cats.get(f.code, 0) + 1
+        print(f"archivo: {os.path.relpath(self.path)}")
+        print(f"líneas: {len(self.lines)} · {self.call_count} llamadas a funciones v6 contrastadas "
+              f"contra {len(self.functions)} firmas de la referencia")
+        print(f"errores: {len(errors)} · avisos: {len(warns)}\n")
+        if cats:
+            print("errores por categoría:")
+            for code in sorted(cats):
+                print(f"  {code}: {cats[code]}")
+            print()
+        for f in sorted(errors, key=lambda x: (x.line, x.code)):
+            print(" ", f)
+        for f in sorted(warns, key=lambda x: (x.line, x.code)):
+            print(" ", f)
+        return len(errors)
+
+
+def main():
+    target = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_TARGET
+    ref = json.load(open(REF_PATH, encoding="utf-8"))
+    lint = Linter(target, ref)
+    lint.run()
+    errors = lint.report()
+    print()
+    print("RESULTADO:", "OK (0 errores v6)" if errors == 0 else f"FALLO ({errors} errores)")
+    return 0 if errors == 0 else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
