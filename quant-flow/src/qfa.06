@@ -26,11 +26,24 @@ color  atrCol    = atrRegime == "EXPANSIÓN" ? cWarn : atrRegime == "COMPRESIÓN
 string quality   = confidence >= 80.0 and relVol >= 1.0 ? "ALTA" : confidence >= 60.0 ? "MEDIA" : "BAJA"
 color  qualCol   = quality == "ALTA" ? cBull : quality == "MEDIA" ? cWarn : cBear
 string biasTxt   = score >= effSoftTh ? "VENTAJA COMPRADORA" : score <= -effSoftTh ? "VENTAJA VENDEDORA" : "SIN VENTAJA"
+bool   isMobile = dashMode == "Mobile"
+bool   isPredictor = dashMode == "Predictor"
 float barChange  = open > 0 ? (close - open) / open * 100.0 : 0.0
 string clockTxt  = str.format_time(time, "dd/MM HH:mm", syminfo.timezone)
+string clockShow = isMobile ? str.format_time(time, "HH:mm", syminfo.timezone) : clockTxt
+string trendTxt  = trendDir + " " + str.tostring(trendPower, "#") + "%"
+string diTxt     = (diSpread >= 0 ? "+" : "") + str.tostring(diSpread, "#.#") + (adxRising ? " ▲" : " ▼")
+string stackTxt  = "Stack " + str.tostring(stackBull) + "/4"
+string predTxt   = predDirTxt + " a " + fPx(predPrice) + " (" + fSig2(predRetPct) + "%) · P" + str.tostring(probUp, "#") + "%"
+string predRangeTxt = fPx(predLow) + " – " + fPx(predHigh)
+string zoneShort = inBullOB ? "OB ALC" + obBullSuf : inBearOB ? "OB BAJ" + obBearSuf : inBullFVG ? "FVG ALC" : inBearFVG ? "FVG BAJ" : discount ? "DISC " + str.tostring(rangePos, "#") + "%" : premium ? "PREM " + str.tostring(rangePos, "#") + "%" : "SIN ZONA"
 string sessTxt   = not useSess ? "FILTRO OFF" : inLondon and inNY ? "LONDRES + NUEVA YORK" : inLondon ? "LONDRES" : inNY ? "NUEVA YORK" : "FUERA DE SESIÓN ×" + str.tostring(sessPenalty, "#.##")
 color  sessCol   = not useSess ? cMuted : inKill ? cBull : cWarn
 string sessDetail = not useSess ? "score sin atenuar" : inKill ? "killzone activa · score ×1" : "score ×" + str.tostring(sessPenalty, "#.##") + " · FUERTE bloqueado" + (sessBlockStrong ? "" : " (permitido)")
+// Motivo y pie: se definen aqui (tras sessTxt) porque los usan; el modo
+// Predictor/Mobile los acorta y pone el pronostico primero (pantallas 6.7).
+string motivoTxt = isPredictor ? predTxt + " · " + trendTxt + " · " + ctrlTxt + " " + str.tostring(controlPct, "#") + "% · ADX " + str.tostring(adxVal, "#") : isMobile ? zoneShort + " · " + ctrlTxt + " " + str.tostring(controlPct, "#") + "% · " + predTxt : zoneTxt + " · " + ctrlTxt + " " + str.tostring(controlPct, "#") + "% · ADX " + str.tostring(adxVal, "#") + " · " + momState + " · " + sessTxt + " · " + obLastEvent
+string pieTxt    = isMobile or isPredictor ? "H" + str.tostring(predHorizon) + ": " + predTxt + " [" + predRangeTxt + "] · No es asesoramiento" : "Delta/FP estimados por intrabars · No es asesoramiento financiero"
 
 var bool dashInit = false
 
@@ -51,7 +64,7 @@ if showDash and barstate.islast
         dashInit := true
 
     // 0 · cabecera
-    fCell(dash, 0, 0, "⚛ QUANTUM FLOW ANALYZER · v6 │ " + profKey, cText, cHead, szDL, text.align_center)
+    fCell(dash, 0, 0, "⚛ QUANTUM FLOW ANALYZER · v6 │ " + profKey + " │ " + dashMode, cText, cHead, szDL, text.align_center)
     // 1 · activo
     fCell(dash, 0, 1, "ACTIVO",  cMuted, cBg, szD, text.align_left)
     fCell(dash, 1, 1, syminfo.ticker, cText, cBg, szD, text.align_left)
@@ -61,7 +74,7 @@ if showDash and barstate.islast
     fCell(dash, 0, 2, "PRECIO", cMuted, cBgAlt, szD, text.align_left)
     fCell(dash, 1, 2, fPx(close), cText, cBgAlt, szD, text.align_left)
     fCell(dash, 2, 2, fSig2(barChange) + "%", barChange >= 0 ? cBull : cBear, cBgAlt, szD, text.align_left)
-    fCell(dash, 3, 2, clockTxt, cMuted, cBgAlt, szD, text.align_right)
+    fCell(dash, 3, 2, clockShow, cMuted, cBgAlt, szD, text.align_right)
     // 3 · sección
     fCell(dash, 0, 3, "▌ VOLUMEN & ORDERFLOW", cText, cHead, szDL, text.align_left)
     // 4 · volumen
@@ -92,28 +105,28 @@ if showDash and barstate.islast
     // 10 · ADX
     fCell(dash, 0, 10, "ADX", cMuted, cBg, szD, text.align_left)
     fCell(dash, 1, 10, str.tostring(adxVal, "#.#"), adxCol, cBg, szD, text.align_left)
-    fCell(dash, 2, 10, "+" + str.tostring(diP, "#.#") + " / -" + str.tostring(diM, "#.#"), cMuted, cBg, szD, text.align_left)
-    fCell(dash, 3, 10, adxState, adxCol, cBg, szD, text.align_right)
+    fCell(dash, 2, 10, isMobile ? diTxt : "+" + str.tostring(diP, "#.#") + " / -" + str.tostring(diM, "#.#") + " (" + diTxt + ")", cMuted, cBg, szD, text.align_left)
+    fCell(dash, 3, 10, isMobile ? adxState : adxState + " F" + str.tostring(trendPower, "#") + "%", adxCol, cBg, szD, text.align_right)
     // 11 · momentum
     fCell(dash, 0, 11, "Momentum", cMuted, cBgAlt, szD, text.align_left)
     fCell(dash, 1, 11, fPx(momVal), momCol, cBgAlt, szD, text.align_left)
     fCell(dash, 2, 11, fSig2(rocVal) + "%", momCol, cBgAlt, szD, text.align_left)
-    fCell(dash, 3, 11, momState, momCol, cBgAlt, szD, text.align_right)
+    fCell(dash, 3, 11, isMobile ? "RSI " + str.tostring(rsiVal, "#") : momState + " RSI " + str.tostring(rsiVal, "#"), momCol, cBgAlt, szD, text.align_right)
     // 12 · EMAs
     fCell(dash, 0, 12, "EMAs", cMuted, cBg, szD, text.align_left)
     fCell(dash, 1, 12, str.tostring(lenE1) + "/" + str.tostring(lenE2) + "/" + str.tostring(lenE3) + "/" + str.tostring(lenE4), cText, cBg, szD, text.align_left)
     fCell(dash, 2, 12, "Precio vs EMA" + str.tostring(lenE4) + ": " + fSig2(close > 0 ? (close - ema4) / close * 100.0 : 0.0) + "%", cMuted, cBg, szD, text.align_left)
-    fCell(dash, 3, 12, emaState, emaCol, cBg, szD, text.align_right)
+    fCell(dash, 3, 12, isMobile ? trendTxt : emaState + " · " + trendTxt, emaCol, cBg, szD, text.align_right)
     // 13 · estructura
     fCell(dash, 0, 13, "Estructura", cMuted, cBgAlt, szD, text.align_left)
     fCell(dash, 1, 13, structTxt, structCol, cBgAlt, szD, text.align_left)
-    fCell(dash, 2, 13, "Swings " + str.tostring(pivLen), cMuted, cBgAlt, szD, text.align_left)
-    fCell(dash, 3, 13, structure == 1 ? "ALZA" : structure == -1 ? "BAJA" : "RANGO", structCol, cBgAlt, szD, text.align_right)
+    fCell(dash, 2, 13, isMobile ? stackTxt : "Swings " + str.tostring(pivLen) + " · " + stackTxt, cMuted, cBgAlt, szD, text.align_left)
+    fCell(dash, 3, 13, isMobile or isPredictor ? trendDir : structure == 1 ? "ALZA" : structure == -1 ? "BAJA" : "RANGO", trendCol, cBgAlt, szD, text.align_right)
     // 14 · sección
     fCell(dash, 0, 14, "▌ ZONAS & SMC", cText, cHead, szDL, text.align_left)
     // 15 · zona actual
     fCell(dash, 0, 15, "Zona", cMuted, cBg, szD, text.align_left)
-    fCell(dash, 1, 15, zoneTxt, zoneCol, cBg, szD, text.align_left)
+    fCell(dash, 1, 15, isMobile ? zoneShort : zoneTxt, zoneCol, cBg, szD, text.align_left)
     // 16 · ubicación rango
     fCell(dash, 0, 16, "Rango", cMuted, cBgAlt, szD, text.align_left)
     fCell(dash, 1, 16, locTxt, locCol, cBgAlt, szD, text.align_left)
@@ -138,10 +151,10 @@ if showDash and barstate.islast
     fCell(dash, 0, 21, "Stop 1.5 ATR", cMuted, cBgAlt, szD, text.align_left)
     fCell(dash, 1, 21, fPx(close - atrVal * 1.5), cBull, cBgAlt, szD, text.align_left)
     fCell(dash, 2, 21, fPx(close + atrVal * 1.5), cBear, cBgAlt, szD, text.align_left)
-    fCell(dash, 3, 21, "long / short", cMuted, cBgAlt, szD, text.align_right)
+    fCell(dash, 3, 21, isPredictor ? predRangeTxt : "long / short", cMuted, cBgAlt, szD, text.align_right)
     // 22 · calidad
     fCell(dash, 0, 22, "Calidad", cMuted, cBg, szD, text.align_left)
-    fCell(dash, 1, 22, str.tostring(confidence, "#") + "% confluencia", cText, cBg, szD, text.align_left)
+    fCell(dash, 1, 22, str.tostring(confidence, "#") + "% conf" + (isMobile ? "" : "luencia") + " · P" + str.tostring(probUp, "#") + "%", cText, cBg, szD, text.align_left)
     fCell(dash, 2, 22, str.tostring(aligned) + "/5 factores", cMuted, cBg, szD, text.align_left)
     fCell(dash, 3, 22, quality, qualCol, cBg, szD, text.align_right)
     // 23 · sección
@@ -155,10 +168,10 @@ if showDash and barstate.islast
     fCell(dash, 0, 25, "Score", cMuted, cBgAlt, szD, text.align_left)
     fCell(dash, 1, 25, fSig0(score) + " / 100", score >= 0 ? cBull : cBear, cBgAlt, szD, text.align_left)
     fCell(dash, 2, 25, fBar(score, 10), score >= 0 ? cBull : cBear, cBgAlt, szD, text.align_left)
-    fCell(dash, 3, 25, biasTxt, score >= effSoftTh ? cBull : score <= -effSoftTh ? cBear : cNeut, cBgAlt, szD, text.align_right)
+    fCell(dash, 3, 25, isMobile ? trendTxt : biasTxt + " · " + trendTxt, score >= effSoftTh ? cBull : score <= -effSoftTh ? cBear : cNeut, cBgAlt, szD, text.align_right)
     // 26 · decisión
     fCell(dash, 0, 26, decision, color.white, decCol, szDL, text.align_center)
     // 27 · motivo
-    fCell(dash, 0, 27, zoneTxt + " · " + ctrlTxt + " " + str.tostring(controlPct, "#") + "% · ADX " + str.tostring(adxVal, "#") + " · " + momState + " · " + sessTxt + " · " + obLastEvent, cMuted, cBgAlt, szD, text.align_center)
+    fCell(dash, 0, 27, motivoTxt, cMuted, cBgAlt, szD, text.align_center)
     // 28 · pie
-    fCell(dash, 0, 28, "Delta/FP estimados por intrabars · No es asesoramiento financiero", cNeut, cBg, szD, text.align_center)
+    fCell(dash, 0, 28, pieTxt, cNeut, cBg, szD, text.align_center)
