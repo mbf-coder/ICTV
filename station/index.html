@@ -74,7 +74,14 @@
       <div><label>&nbsp;</label><button class="ghost" id="calc">Calculate</button></div></div>
       <p class="note" id="posOut">—</p>
     </div>
-  </div></section>
+  </div>
+  <br>
+  <div class="card"><h2>Backtest · scenario 12 (this dataset)</h2><div id="bt12" style="font-family:var(--mono);font-size:13px;line-height:1.9">—</div>
+    <p class="note">Same rules as <code>verify/verify_runtime.mjs</code> scenario 12: STRONG signals
+    in/out at H=10; predictor hit = sign(predMove) vs the +5-bar return (warmup 200 bars, or two
+    thirds of the data when shorter). Numbers move with the loaded feed (live Binance or offline
+    synthetic); the audited values come from <code>bash verify/verify_all.sh</code>.</p></div>
+  </section>
 </div>
 
 <footer>
