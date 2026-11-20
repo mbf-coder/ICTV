@@ -65,10 +65,12 @@ if [ ! -f verify/v6_reference.json ]; then
 fi
 
 step "1/5 · Sintaxis: parse AST (pynescript)"
-"$PY" verify/parse_pynescript.py || fail "el parser rechazó el archivo"
+"$PY" verify/parse_pynescript.py || fail "el parser rechazó el indicador"
+"$PY" verify/parse_pynescript.py quant-flow/QuantumFlowStrategy_v6.pine || fail "el parser rechazó la estrategia"
 
 step "2/5 · Lint estático Pine v6 (firmas + tipos + reglas de migración)"
-"$PY" verify/pine_v6_lint.py || fail "el lint reportó errores"
+"$PY" verify/pine_v6_lint.py || fail "el lint reportó errores en el indicador"
+"$PY" verify/pine_v6_lint.py quant-flow/QuantumFlowStrategy_v6.pine || fail "el lint reportó errores en la estrategia"
 
 step "3/5 · Autoprueba del lint (debe detectar 18/18 defectos)"
 "$PY" verify/selftest_lint.py || fail "el lint no detecta defectos inyectados"
@@ -77,6 +79,7 @@ step "4/5 · Runtime: PineTS (600 barras sintéticas + datos reales Binance)"
 node verify/verify_runtime.mjs || fail "falló la verificación de ejecución"
 
 step "5/5 · Checklist de requisitos de la misión"
-"$PY" verify/check_features.py || fail "faltan requisitos de la misión"
+"$PY" verify/check_features.py || fail "faltan requisitos del indicador"
+"$PY" verify/check_strategy.py || fail "faltan requisitos de la estrategia"
 
 ok "TODO OK: sintaxis, tipos v6, ejecución, panel, footprint y requisitos"
