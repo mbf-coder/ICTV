@@ -1,0 +1,165 @@
+
+float adxDir  = (diP + diM) > 0 ? (diP - diM) / (diP + diM) : 0.0
+float adxK    = math.min(adxVal / math.max(effAdxStr, 1.0), 1.0)
+float aScore  = adxDir * 100.0 * adxK
+
+float mScore = math.max(-100.0, math.min(100.0, momAtr * 40.0))
+
+float ofScore = math.max(-100.0, math.min(100.0, deltaPct * effOfDK + cvdSlopePct * effOfCK + (controlPct - 50.0) * effOfWK))
+
+float sScore = math.max(-100.0, math.min(100.0, (50.0 - rangePos) * 1.2 + structure * 40.0))
+
+float wSum = (effWTrend + effWAdx + effWMom + effWOF + effWStruct) * 1.0
+float scoreRaw = (tScore * effWTrend + aScore * effWAdx + mScore * effWMom + ofScore * effWOF + sScore * effWStruct) / math.max(wSum, 1.0)
+scoreRaw := math.max(-100.0, math.min(100.0, scoreRaw))
+
+// ── Filtro de sesiones Londres / NY ──────────────────────────────────────────
+// Las killzones se evalúan con time() en la zona horaria elegida. Fuera de
+// sesión el score se atenúa hacia cero con sessPenalty para evitar operar en
+// horas de baja liquidez. Con sessBlockStrong las señales FUERTES exigen
+// estar dentro de killzone aunque el score atenuado siga alto.
+bool inLondon = not na(time(timeframe.period, londonSess, sessTZ))
+bool inNY     = not na(time(timeframe.period, nySess, sessTZ))
+bool inKill   = not useSess or inLondon or inNY
+float sessMult = inKill ? 1.0 : sessPenalty
+bool allowStrong = inKill or not sessBlockStrong or not useSess
+float score = scoreRaw * sessMult
+score := math.max(-100.0, math.min(100.0, score))
+
+float sgn = score >= 0 ? 1.0 : -1.0
+int aligned = 0
+aligned += ((tScore * sgn) > 10.0 ? 1 : 0)
+aligned += ((aScore * sgn) > 10.0 ? 1 : 0)
+aligned += ((mScore * sgn) > 10.0 ? 1 : 0)
+aligned += ((ofScore * sgn) > 10.0 ? 1 : 0)
+aligned += ((sScore * sgn) > 10.0 ? 1 : 0)
+float confidence = aligned / 5.0 * 100.0
+
+// ── Decisión ──────────────────────────────────────────────────────────────────
+bool warmupOk = bar_index > lenE4 and not na(ema4) and not na(adxVal)
+
+string decision = "ESPERAR"
+color  decCol   = cNeut
+if not warmupOk
+    decision := "CARGANDO DATOS"
+    decCol   := cMuted
+else if score >= effStrongTh and allowStrong and (not reqZone or zoneBuy)
+    decision := "FUERTE COMPRA"
+    decCol   := cBull
+else if score <= -effStrongTh and allowStrong and (not reqZone or zoneSell)
+    decision := "FUERTE VENTA"
+    decCol   := cBear
+else if score >= effSoftTh
+    decision := "COMPRA"
+    decCol   := color.new(cBull, 20)
+else if score <= -effSoftTh
+    decision := "VENTA"
+    decCol   := color.new(cBear, 20)
+else if math.abs(score) < 15.0
+    decision := "ESPERAR · SIN VENTAJA"
+    decCol   := cWarn
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  5 · PERFIL DE VOLUMEN (POC / VAH / VAL)
+// ═══════════════════════════════════════════════════════════════════════════════
+var float pocPrice = na
+var float vahPrice = na
+var float valPrice = na
+
+float vpHi = ta.highest(high, vpLook)
+float vpLo = ta.lowest(low, vpLook)
+
+if showVP and barstate.islast
+    float vpSpan = vpHi - vpLo
+    if vpSpan > 0
+        float binSize = vpSpan / vpBins
+        array<float> prof = array.new<float>(vpBins, 0.0)
+        int vpBars = math.min(vpLook, bar_index + 1)
+        for b = 0 to vpBars - 1
+            int loBin = int(math.floor((low[b] - vpLo) / binSize))
+            int hiBin = int(math.floor((high[b] - vpLo) / binSize))
+            loBin := math.max(0, math.min(vpBins - 1, loBin))
+            hiBin := math.max(0, math.min(vpBins - 1, hiBin))
+            int span = hiBin - loBin + 1
+            float per = span > 0 ? volume[b] / span : volume[b]
+            for k = loBin to hiBin
+                array.set(prof, k, array.get(prof, k) + per)
+        int   pocIdx = 0
+        float pocMax = -1.0
+        float vpTot  = 0.0
+        for k = 0 to vpBins - 1
+            float pv = array.get(prof, k)
+            vpTot += pv
+            if pv > pocMax
+                pocMax := pv
+                pocIdx := k
+        float target = vpTot * vpVA / 100.0
+        float acc    = array.get(prof, pocIdx)
+        int   upBin  = pocIdx
+        int   dnBin  = pocIdx
+        while acc < target and (upBin < vpBins - 1 or dnBin > 0)
+            float vUp = upBin < vpBins - 1 ? array.get(prof, upBin + 1) : -1.0
+            float vDn = dnBin > 0 ? array.get(prof, dnBin - 1) : -1.0
+            if vUp >= vDn
+                upBin += 1
+                acc   += vUp
+            else
+                dnBin -= 1
+                acc   += vDn
+        pocPrice := vpLo + (pocIdx + 0.5) * binSize
+        vahPrice := vpLo + (upBin + 1) * binSize
+        valPrice := vpLo + dnBin * binSize
+
+var line lPoc = na
+var line lVah = na
+var line lVal = na
+if showVP and barstate.islast and not na(pocPrice)
+    int lx1 = bar_index - vpLook
+    int lx2 = bar_index + 40
+    if na(lPoc)
+        lPoc := line.new(lx1, pocPrice, lx2, pocPrice, color = color.new(cWarn, 0), width = 2, style = line.style_solid)
+        lVah := line.new(lx1, vahPrice, lx2, vahPrice, color = color.new(cWarn, 55), width = 1, style = line.style_dashed)
+        lVal := line.new(lx1, valPrice, lx2, valPrice, color = color.new(cWarn, 55), width = 1, style = line.style_dashed)
+    else
+        line.set_xy1(lPoc, lx1, pocPrice)
+        line.set_xy2(lPoc, lx2, pocPrice)
+        line.set_xy1(lVah, lx1, vahPrice)
+        line.set_xy2(lVah, lx2, vahPrice)
+        line.set_xy1(lVal, lx1, valPrice)
+        line.set_xy2(lVal, lx2, valPrice)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  6 · DIBUJOS EN EL GRÁFICO
+// ═══════════════════════════════════════════════════════════════════════════════
+plot(showEMA ? ema1 : na, "EMA rápida",  color = color.new(#2962FF, 0), linewidth = 1)
+plot(showEMA ? ema2 : na, "EMA media",   color = color.new(#FFB300, 0), linewidth = 1)
+plot(showEMA ? ema3 : na, "EMA lenta",   color = color.new(#AB47BC, 0), linewidth = 2)
+plot(showEMA ? ema4 : na, "EMA tendencia", color = color.new(#78909C, 0), linewidth = 2)
+plot(showVwap ? vwapVal : na, "VWAP", color = color.new(#26C6DA, 0), linewidth = 2, style = plot.style_circles)
+
+barcolor(colorBars ? (deltaVal > 0 ? color.new(colBull, 0) : deltaVal < 0 ? color.new(colBear, 0) : cNone) : cNone, title = "Color por delta")
+bgcolor(useSess and inKill ? color.new(#00C853, 92) : na, title = "Killzone Londres/NY")
+
+// datos en ventana de datos
+plot(deltaVal, "Delta", color = color.new(cBull, 0), display = display.data_window)
+plot(deltaPct, "Delta %", color = color.new(cBull, 0), display = display.data_window)
+plot(cvd, "CVD", color = color.new(#29B6F6, 0), display = display.data_window)
+plot(controlPct, "Control compradores %", display = display.data_window)
+plot(relVol, "Volumen relativo", display = display.data_window)
+plot(adxVal, "ADX", display = display.data_window)
+plot(diP, "+DI", display = display.data_window)
+plot(diM, "-DI", display = display.data_window)
+plot(momVal, "Momentum", display = display.data_window)
+plot(scoreRaw, "Score base (sin sesión)", display = display.data_window)
+plot(score, "Score cuántico", display = display.data_window)
+plot(sessMult, "Sesión mult", display = display.data_window)
+plot(inKill ? 1.0 : 0.0, "En killzone", display = display.data_window)
+plot(confidence, "Confluencia %", display = display.data_window)
+plot(array.size(obBoxes), "OB vivos", display = display.data_window)
+plot(obTouchN, "OB toques", display = display.data_window)
+plot(obMitigN, "OB mitigados", display = display.data_window)
+plot(obInvalidN, "OB invalidados", display = display.data_window)
+plot(inBullOB ? 1.0 : inBearOB ? -1.0 : 0.0, "En OB", display = display.data_window)
+plot(effStrongTh, "Perfil strong", display = display.data_window)
+plot(effSoftTh, "Perfil soft", display = display.data_window)
+plot(effAdxMin, "Perfil adxMin", display = display.data_window)
