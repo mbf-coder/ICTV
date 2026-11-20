@@ -234,7 +234,33 @@ function render() {
     `<tr><td>Stops (1.5 ATR)</td><td>${(b.c - s.atr * 1.5).toLocaleString("en-US", { maximumFractionDigits: 2 })} / ${(b.c + s.atr * 1.5).toLocaleString("en-US", { maximumFractionDigits: 2 })}</td></tr>` +
     `<tr><td>Killzone (UTC)</td><td>${kz.label}</td></tr></table>`;
   calc();
+  backtest12();
   drawChart();
+}
+function backtest12() { // scenario-12 rules on the loaded feed (proxy engine)
+  const n = BARS.length, WARM = Math.min(200, Math.floor(n * 2 / 3));
+  let nb = 0, ns = 0, wb = 0, ws = 0;
+  for (let i = WARM; i + 10 < n; i++) {
+    if (!ST[i] || !ST[i + 10]) continue;
+    const d = decisionAt(ST[i], i, BARS, ST), e = BARS[i].c, x = BARS[i + 10].c;
+    if (!(e > 0) || !isFinite(x)) continue;
+    if (d === "STRONG BUY") { nb++; if (x > e) wb++; }
+    else if (d === "STRONG SELL") { ns++; if (x < e) ws++; }
+  }
+  const nt = nb + ns, wr = nt ? (wb + ws) / nt * 100 : NaN;
+  let m = 0, h = 0, up = 0, hu = 0, dn = 0, hd = 0;
+  for (let i = WARM; i + H < n; i++) {
+    if (!ST[i]) continue;
+    const pm = ST[i].pm, act = BARS[i + H].c - BARS[i].c;
+    if (!isFinite(pm) || pm === 0 || act === 0) continue;
+    m++; const hit = Math.sign(pm) === Math.sign(act); if (hit) h++;
+    if (pm > 0) { up++; if (hit) hu++; } else { dn++; if (hit) hd++; }
+  }
+  const f = (v, d = 2) => isFinite(v) ? v.toFixed(d) : "—";
+  $("bt12").innerHTML =
+    `STRONG H=10 · n=${nt} (B=${nb} S=${ns}) · win ${f(wr, 1)}% · post-warmup from bar ${WARM}<br>` +
+    `Predictor HP=${H} · n=${m} hits=${h} · hit-rate <b>${f(h / m * 100, 1)}%</b>` +
+    ` · up ${f(hu / up * 100, 1)}% (n=${up}) · down ${f(hd / dn * 100, 1)}% (n=${dn})`;
 }
 function calc() {
   const i = BARS.length - 1; if (!ST[i]) return;
