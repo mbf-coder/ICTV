@@ -122,6 +122,12 @@ string dashPos  = input.string("Top Right", "Posición del panel",
      options = ["Top Right", "Top Left", "Middle Right", "Bottom Right", "Bottom Left"], group = gDS)
 string dashSz   = input.string("Normal", "Tamaño del texto",
      options = ["Compacto", "Normal", "Grande"], group = gDS)
+string dashMode = input.string("Completo", "Modo de panel",
+     options = ["Completo", "Mobile", "Predictor"], group = gDS,
+     tooltip = "Completo: 29 filas con todo el detalle. Mobile: textos cortos para pantallas de 6.7 pulgadas. Predictor: el motivo y el pie priorizan el pronostico.")
+int    predHorizon = input.int(5, "Horizonte de prediccion (barras)",
+     minval = 2, maxval = 20, group = gDS,
+     tooltip = "Velas hacia adelante que usa el pronostico de precio (extrapola momentum + score).")
 float  strongTh = input.float(60.0, "Umbral señal fuerte", minval = 30, maxval = 95, step = 5, group = gDS)
 float  softTh   = input.float(30.0, "Umbral señal", minval = 10, maxval = 90, step = 5, group = gDS)
 bool   reqZone  = input.bool(true, "Señal fuerte solo en zona de interés", group = gDS)
