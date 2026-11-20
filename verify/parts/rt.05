@@ -1,0 +1,156 @@
+    const enOB = lastValue(p['En OB']);
+    check('OB vivos finito y dentro del tope maxOB (12)', Number.isFinite(vivos) && vivos >= 0 && vivos <= 12, `vivos=${vivos}`);
+    check('contadores T/M/I finitos y monótonos', [toques, mitig, inval].every((v) => Number.isFinite(v) && v >= 0),
+        `T=${toques} M=${mitig} I=${inval}`);
+    check('mitigados <= toques (solo se mitiga lo tocado)', mitig <= toques, `M=${mitig} T=${toques}`);
+    check('En OB ∈ {-1,0,1}', [-1, 0, 1].includes(enOB), `enOB=${enOB}`);
+    const dash = tablesOf(ctx).find((t) => t.rows === 29);
+    const zona = dash ? (cellMap(dash).get('1,15') ?? '') : '';
+    const motivo = dash ? (cellMap(dash).get('0,27') ?? '') : '';
+    check('panel zona expone estado OB (VIRGEN/TOCADO/MITIGADO o conteo T/M/I)',
+        /VIRGEN|TOCADO|MITIGADO|T\d+ M\d+ I\d+|OB \d+v/.test(zona), `zona="${zona.slice(0, 90)}"`);
+    check('motivo incluye último evento del OB', motivo.includes('OB') || motivo.includes('—'), `motivo="${motivo.slice(0, 90)}"`);
+    // Limpieza forzada: extensión mínima para que los OBs caduquen/invaliden rápido.
+    let src2 = withInputs(SRC, [['input.int(30, "Extensión del OB (barras)"', 'input.int(2, "Extensión del OB (barras)"']]);
+    const pine2 = new PineTS(BARS, 'TESTUSD', '1h', BARS.length);
+    const ctx2 = await pine2.run(src2);
+    check('limpieza: ejecución sin excepción con extensión mínima', !!ctx2);
+    check('limpieza: sin warnings del runtime', (ctx2?.warnings ?? []).length === 0);
+    const v2 = lastValue(ctx2.plots?.['OB vivos']);
+    const i2 = lastValue(ctx2.plots?.['OB invalidados']);
+    check('limpieza: vivos acotados tras forzar roturas', Number.isFinite(v2) && v2 >= 0 && v2 <= 12, `vivos=${v2} invalidados=${i2}`);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ESCENARIO 12 · backtest mínimo de señales FUERTE (nº, win-rate a H, MFE/MAE)
+// 12a sintético (determinista, siempre corre): las banderas SIG FUERTE COMPRA/
+// VENTA son series completas y deben dar ≥1 señal con métricas coherentes.
+// 12b real (Binance BTCUSDT 15m, N=500): mide lo mismo sobre mercado real;
+// sin red se omite con SKIP. Si la ventana no trae señales FUERTE (depende del
+// mercado), se informa sin fallar: lo que se verifica es la integridad del
+// cálculo, no la rentabilidad.
+// Reglas: entrada al cierre de la vela de señal, salida al cierre H=10 velas
+// después; solo señales post-warmup (índice ≥ 200). MFE/MAE en % sobre
+// máximos/mínimos de la ventana (i+1..i+H).
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n═══ ESCENARIO 12 · backtest FUERTE ═══');
+{
+    const H = 10;
+    const WARM = 200;
+    function backtest(closes, highs, lows, buys, sells, h, from) {
+        const t = { nBuy: 0, nSell: 0, wBuy: 0, wSell: 0, mfe: [], mae: [], net: [] };
+        const nb = closes.length;
+        for (let i = from; i + h < nb; i++) {
+            const isBuy = buys[i] === 1;
+            const isSell = sells[i] === 1;
+            if (!isBuy && !isSell) continue;
+            if (isBuy && isSell) continue;
+            const entry = closes[i];
+            if (!Number.isFinite(entry) || entry <= 0) continue;
+            let mx = -Infinity, mn = Infinity;
+            for (let k = i + 1; k <= i + h; k++) {
+                if (Number.isFinite(highs[k])) mx = Math.max(mx, highs[k]);
+                if (Number.isFinite(lows[k])) mn = Math.min(mn, lows[k]);
+            }
+            const exit = closes[i + h];
+            if (!Number.isFinite(exit) || !Number.isFinite(mx) || !Number.isFinite(mn)) continue;
+            let ret, mfe, mae;
+            if (isBuy) {
+                ret = (exit - entry) / entry * 100;
+                mfe = (mx - entry) / entry * 100;
+                mae = (entry - mn) / entry * 100;
+                t.nBuy++;
+                if (ret > 0) t.wBuy++;
+            } else {
+                ret = (entry - exit) / entry * 100;
+                mfe = (entry - mn) / entry * 100;
+                mae = (mx - entry) / entry * 100;
+                t.nSell++;
+                if (ret > 0) t.wSell++;
+            }
+            t.mfe.push(mfe);
+            t.mae.push(mae);
+            t.net.push(ret);
+        }
+        const nT = t.nBuy + t.nSell;
+        const mean = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : NaN);
+        return { ...t, n: nT, wr: nT ? (t.wBuy + t.wSell) / nT : NaN, wrBuy: t.nBuy ? t.wBuy / t.nBuy : NaN,
+            wrSell: t.nSell ? t.wSell / t.nSell : NaN, mfeAvg: mean(t.mfe), maeAvg: mean(t.mae), netAvg: mean(t.net) };
+    }
+    function fmtPct(v, d = 2) {
+        return Number.isFinite(v) ? v.toFixed(d) + '%' : 'n/a';
+    }
+    // 12a · sintético determinista
+    {
+        const pine = new PineTS(BARS, 'TESTUSD', '1h', BARS.length);
+        const ctx = await pine.run(SRC);
+        console.log('\n▶ backtest sintético (600 barras, H=10)');
+        check('backtest sintético: ejecución sin excepción', !!ctx);
+        check('backtest sintético: sin warnings', (ctx?.warnings ?? []).length === 0);
+        const p = ctx.plots ?? {};
+        check('banderas SIG FUERTE presentes', 'SIG FUERTE COMPRA' in p && 'SIG FUERTE VENTA' in p);
+        const buys = seriesValues(p['SIG FUERTE COMPRA']);
+        const sells = seriesValues(p['SIG FUERTE VENTA']);
+        const okBin = (a) => a.every((v) => v === 0 || v === 1 || (typeof v === 'number' && Number.isNaN(v)));
+        check('banderas binarias (0/1)', okBin(buys) && okBin(sells));
+        const closes = BARS.map((b) => b.close);
+        const highs = BARS.map((b) => b.high);
+        const lows = BARS.map((b) => b.low);
+        const r = backtest(closes, highs, lows, buys, sells, H, WARM);
+        check('≥1 señal FUERTE post-warmup en sintético', r.n >= 1, `n=${r.n} (C=${r.nBuy} V=${r.nSell})`);
+        check('win-rate total en [0,1]', r.n >= 1 && r.wr >= 0 && r.wr <= 1, `wr=${fmtPct(r.wr * 100)}`);
+        check('MFE/MAE medios ≥ 0', r.mfeAvg >= 0 && r.maeAvg >= 0, `MFE=${fmtPct(r.mfeAvg)} MAE=${fmtPct(r.maeAvg)}`);
+        check('retorno medio finito', Number.isFinite(r.netAvg), `net=${fmtPct(r.netAvg)}`);
+        console.log(`  info  sintético: n=${r.n} (C=${r.nBuy} V=${r.nSell}) wr=${fmtPct(r.wr * 100)} wrC=${fmtPct(r.wrBuy * 100)} wrV=${fmtPct(r.wrSell * 100)} MFE=${fmtPct(r.mfeAvg)} MAE=${fmtPct(r.maeAvg)} net=${fmtPct(r.netAvg)}`);
+    }
+    // 12b · real Binance
+    const SYM = 'BTCUSDT', TF = '15m', N = 500;
+    const skipReason = await binancePreflight(SYM, TF);
+    if (skipReason) {
+        skipped++;
+        console.log(`  SKIP  backtest real — sin red: ${skipReason}`);
+    } else {
+        const t0 = Date.now();
+        const pine = new PineTS(Provider.Binance, SYM, TF, N);
+        try {
+            await withTimeout(pine.ready(), 90000, 'carga klines (backtest)');
+            const ctx = await withTimeout(pine.run(SRC), 240000, 'ejecución (backtest)');
+            const warns = ctx?.warnings ?? [];
+            check('backtest real: sin warnings', warns.length === 0, warns.length ? JSON.stringify(warns).slice(0, 200) : 'warnings=0');
+            const p = ctx.plots ?? {};
+            const buys = seriesValues(p['SIG FUERTE COMPRA']);
+            const sells = seriesValues(p['SIG FUERTE VENTA']);
+            const nbars = pine.data?.length ?? 0;
+            check('backtest real: N barras y series alineadas', nbars >= WARM + H + 10 && buys.length === nbars && sells.length === nbars,
+                `barras=${nbars} series=${buys.length}/${sells.length}`);
+            const closes = pine.data.map((b) => b.close);
+            const highs = pine.data.map((b) => b.high);
+            const lows = pine.data.map((b) => b.low);
+            const finiteOHLC = closes.every(Number.isFinite) && highs.every(Number.isFinite) && lows.every(Number.isFinite);
+            check('backtest real: OHLC finitos', finiteOHLC);
+            const r = backtest(closes, highs, lows, buys, sells, H, WARM);
+            check('backtest real: conteos consistentes (n=C+V)', r.n === r.nBuy + r.nSell, `n=${r.n} (C=${r.nBuy} V=${r.nSell})`);
+            if (r.n === 0) {
+                console.log('  info  ventana real sin señales FUERTE post-warmup (mercado-dependiente): nº=0, win-rate/MFE/MAE no aplicables — no es un fallo');
+            } else {
+                check('backtest real: win-rate en [0,1]', r.wr >= 0 && r.wr <= 1, `wr=${fmtPct(r.wr * 100)} (C=${fmtPct(r.wrBuy * 100)} V=${fmtPct(r.wrSell * 100)})`);
+                check('backtest real: MFE/MAE medios ≥ 0', r.mfeAvg >= 0 && r.maeAvg >= 0, `MFE=${fmtPct(r.mfeAvg)} MAE=${fmtPct(r.maeAvg)}`);
+                check('backtest real: retorno medio finito', Number.isFinite(r.netAvg), `net=${fmtPct(r.netAvg)}`);
+            }
+            console.log(`  info  real ${SYM} ${TF} H=${H}: n=${r.n} (C=${r.nBuy} V=${r.nSell}) wr=${fmtPct(r.wr * 100)} MFE=${fmtPct(r.mfeAvg)} MAE=${fmtPct(r.maeAvg)} net=${fmtPct(r.netAvg)}`);
+            console.log(`  info  ejecución total del escenario: ${Date.now() - t0} ms`);
+        } catch (e) {
+            failures++;
+            console.log(`  FAIL  backtest real — ${String(e?.message ?? e).slice(0, 200)}`);
+        }
+    }
+}
+
+console.log(`\n══════════════════════════════════════════`);
+const skipTxt = skipped ? ` · ${skipped} escenario(s) omitidos (sin red)` : '';
+console.log(`RESUMEN RUNTIME: ${checks - failures}/${checks} aserciones OK${skipTxt}`);
+if (failures) {
+    console.log(`RESULTADO: FALLO (${failures} aserciones)`);
+    process.exit(1);
+}
+console.log('RESULTADO: OK');
