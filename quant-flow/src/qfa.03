@@ -1,0 +1,165 @@
+                obIdx := i
+                break
+    if obIdx > 0
+        float obTop  = high[obIdx]
+        float obBot  = low[obIdx]
+        color obCol  = bosUp ? colBull : colBear
+        box   newOb  = box.new(bar_index - obIdx, obTop, bar_index + obExt, obBot,
+             border_color = color.new(obCol, 30), border_width = 1,
+             bgcolor = color.new(obCol, 88))
+        array.push(obBoxes, newOb)
+        array.push(obDirs, bosUp ? 1 : -1)
+        array.push(obTouched, false)
+        array.push(obMitig, false)
+        while array.size(obBoxes) > maxOB
+            box deadOb = array.shift(obBoxes)
+            box.delete(deadOb)
+            array.shift(obDirs)
+            array.shift(obTouched)
+            array.shift(obMitig)
+
+// ciclo de vida del OB: toque → mitigación → invalidación + limpieza automática
+// TOQUE: la mecha entra en la caja. MITIGACIÓN: tras el toque, el cierre respeta
+// el OB (alcista cierra sobre el mínimo, bajista bajo el máximo). INVALIDACIÓN:
+// cierre más allá del extremo opuesto con buffer 0.2×ATR → se borra la caja.
+// Las cajas rotas se eliminan en la misma vela; el borde derecho se extiende
+// solo para que no caduquen visualmente antes de romperse o salir por tope maxOB.
+if array.size(obBoxes) > 0
+    int jm = array.size(obBoxes) - 1
+    while jm >= 0
+        box   mb   = array.get(obBoxes, jm)
+        float mTop = box.get_top(mb)
+        float mBot = box.get_bottom(mb)
+        int   mDir = array.get(obDirs, jm)
+        bool  wasT = array.get(obTouched, jm)
+        bool  wasM = array.get(obMitig, jm)
+        color baseCol = mDir == 1 ? colBull : colBear
+        bool  touchNow = low <= mTop and high >= mBot
+        if touchNow and not wasT
+            array.set(obTouched, jm, true)
+            obTouchN += 1
+            obLastEvent := (mDir == 1 ? "OB alcista" : "OB bajista") + " tocado"
+            box.set_bgcolor(mb, color.new(baseCol, 78))
+        bool holds = mDir == 1 ? close >= mBot : close <= mTop
+        if touchNow and holds and not wasM
+            array.set(obMitig, jm, true)
+            obMitigN += 1
+            obLastEvent := (mDir == 1 ? "OB alcista" : "OB bajista") + " mitigado"
+            box.set_bgcolor(mb, color.new(baseCol, 60))
+            box.set_border_width(mb, 2)
+        bool mGone = mDir == 1 ? close < mBot - atrVal * 0.2 : close > mTop + atrVal * 0.2
+        if mGone
+            box.delete(mb)
+            array.remove(obBoxes, jm)
+            array.remove(obDirs, jm)
+            array.remove(obTouched, jm)
+            array.remove(obMitig, jm)
+            obInvalidN += 1
+            obLastEvent := (mDir == 1 ? "OB alcista" : "OB bajista") + " invalidado · limpiado"
+        else
+            if bar_index + obExt > box.get_right(mb)
+                box.set_right(mb, bar_index + obExt)
+        jm -= 1
+
+bool inBullOB = false
+bool inBearOB = false
+bool inBullTouched = false
+bool inBullMitig = false
+bool inBearTouched = false
+bool inBearMitig = false
+if array.size(obBoxes) > 0
+    float obTol = atrVal * zoneTol
+    for i = 0 to array.size(obBoxes) - 1
+        box   zb  = array.get(obBoxes, i)
+        float zTop = box.get_top(zb)
+        float zBot = box.get_bottom(zb)
+        if low <= zTop + obTol and high >= zBot - obTol
+            if array.get(obDirs, i) == 1
+                inBullOB := true
+                if array.get(obTouched, i)
+                    inBullTouched := true
+                if array.get(obMitig, i)
+                    inBullMitig := true
+            else
+                inBearOB := true
+                if array.get(obTouched, i)
+                    inBearTouched := true
+                if array.get(obMitig, i)
+                    inBearMitig := true
+string obBullSuf = inBullOB ? (inBullMitig ? " · MITIGADO" : inBullTouched ? " · TOCADO" : " · VIRGEN") : ""
+string obBearSuf = inBearOB ? (inBearMitig ? " · MITIGADO" : inBearTouched ? " · TOCADO" : " · VIRGEN") : ""
+string obStateTxt = str.tostring(array.size(obBoxes)) + "v · T" + str.tostring(obTouchN) + " M" + str.tostring(obMitigN) + " I" + str.tostring(obInvalidN)
+
+// ── FVG ───────────────────────────────────────────────────────────────────────
+var array<box> fvgBoxes = array.new<box>(0)
+var array<int> fvgDirs  = array.new<int>(0)
+
+bool bullFvg = low > high[2] and close[1] > open[1] and (low - high[2]) >= tickSafe
+bool bearFvg = high < low[2] and close[1] < open[1] and (low[2] - high) >= tickSafe
+
+if showFVG and bullFvg
+    box nfB = box.new(bar_index - 2, low, bar_index + fvgExt, high[2],
+         border_color = color.new(colBull, 45), border_width = 1,
+         bgcolor = color.new(colBull, 92))
+    array.push(fvgBoxes, nfB)
+    array.push(fvgDirs, 1)
+if showFVG and bearFvg
+    box nfS = box.new(bar_index - 2, low[2], bar_index + fvgExt, high,
+         border_color = color.new(colBear, 45), border_width = 1,
+         bgcolor = color.new(colBear, 92))
+    array.push(fvgBoxes, nfS)
+    array.push(fvgDirs, -1)
+
+while array.size(fvgBoxes) > maxFVG
+    box deadFvg = array.shift(fvgBoxes)
+    box.delete(deadFvg)
+    array.shift(fvgDirs)
+
+if array.size(fvgBoxes) > 0
+    int jf = array.size(fvgBoxes) - 1
+    while jf >= 0
+        box   fb   = array.get(fvgBoxes, jf)
+        float fTop = box.get_top(fb)
+        float fBot = box.get_bottom(fb)
+        int   fDir = array.get(fvgDirs, jf)
+        bool  fGone = fDir == 1 ? close < fBot : close > fTop
+        if fGone
+            box.delete(fb)
+            array.remove(fvgBoxes, jf)
+            array.remove(fvgDirs, jf)
+        jf -= 1
+
+bool inBullFVG = false
+bool inBearFVG = false
+if array.size(fvgBoxes) > 0
+    for i = 0 to array.size(fvgBoxes) - 1
+        box   gf  = array.get(fvgBoxes, i)
+        float gTop = box.get_top(gf)
+        float gBot = box.get_bottom(gf)
+        if low <= gTop and high >= gBot
+            if array.get(fvgDirs, i) == 1
+                inBullFVG := true
+            else
+                inBearFVG := true
+
+// ── Premium / Discount ────────────────────────────────────────────────────────
+float rangeHi   = ta.highest(high, rangeLen)
+float rangeLo   = ta.lowest(low, rangeLen)
+float rangeSpan = math.max(rangeHi - rangeLo, tickSafe)
+float rangePos  = (close - rangeLo) / rangeSpan * 100.0
+bool  discount  = rangePos <= 40.0
+bool  premium   = rangePos >= 60.0
+
+bool nearEma  = math.abs(close - ema2) <= atrVal * 0.35
+bool nearVwap = math.abs(close - vwapVal) <= atrVal * 0.5
+bool zoneBuy  = inBullOB or inBullFVG or nearVwap or (discount and nearEma)
+bool zoneSell = inBearOB or inBearFVG or nearVwap or (premium and nearEma)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  4 · MOTOR DE SCORING
+// ═══════════════════════════════════════════════════════════════════════════════
+float tScore = 0.0
+tScore += (close > ema4 ? 25.0 : -25.0)
+tScore += (ema1 > ema2 ? 25.0 : -25.0)
+tScore += (ema2 > ema3 ? 25.0 : -25.0)
+tScore += (ema3 > ema4 ? 25.0 : -25.0)
