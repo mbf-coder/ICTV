@@ -1,0 +1,51 @@
+//  3 · ORDENES
+// ═══════════════════════════════════════════════════════════════════════════════
+if longSig and strategy.position_size == 0
+    strategy.entry("QFL", strategy.long, comment = "QFS LONG imp+adx+dom")
+
+if shortSig and strategy.position_size == 0
+    strategy.entry("QFS", strategy.short, comment = "QFS SHORT imp+adx+dom")
+
+float longStop = close - atrVal * stopK
+float longTP   = close + atrVal * tpK
+float shrtStop = close + atrVal * stopK
+float shrtTP   = close - atrVal * tpK
+float trlOffTk = atrVal * trlOffK / tickSv
+float trlActPx = atrVal * trlActK
+
+if strategy.position_size > 0
+    strategy.exit("QFL_X", from_entry = "QFL", stop = longStop, limit = longTP, comment_loss = "QFS SL", comment_profit = "QFS TP")
+    if useTrl and high - strategy.position_avg_price >= trlActPx
+        strategy.exit("QFL_T", from_entry = "QFL", trail_price = high, trail_offset = trlOffTk, comment_trailing = "QFS TRAIL")
+
+if strategy.position_size < 0
+    strategy.exit("QFS_X", from_entry = "QFS", stop = shrtStop, limit = shrtTP, comment_loss = "QFS SL", comment_profit = "QFS TP")
+    if useTrl and strategy.position_avg_price - low >= trlActPx
+        strategy.exit("QFS_T", from_entry = "QFS", trail_price = low, trail_offset = trlOffTk, comment_trailing = "QFS TRAIL")
+
+if oppExit and strategy.position_size > 0 and shortSig
+    strategy.close("QFL", comment = "QFS giro")
+if oppExit and strategy.position_size < 0 and longSig
+    strategy.close("QFS", comment = "QFS giro")
+if sesExit and not inKill and strategy.position_size != 0
+    strategy.close_all("QFS fuera de sesion")
+if maxBars > 0 and strategy.position_size != 0 and bar_index - strategy.opentrades.entry_bar_index(0) >= maxBars
+    strategy.close_all("QFS tiempo")
+if time > toDate and strategy.position_size != 0
+    strategy.close_all("QFS fin backtest")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  4 · PLOTS Y ALERTAS (ambito global)
+// ═══════════════════════════════════════════════════════════════════════════════
+plot(score, "QFS score", display = display.data_window)
+plot(adxVal, "QFS ADX", display = display.data_window)
+plot(control, "QFS control %", display = display.data_window)
+plot(relVol, "QFS impulso x", display = display.data_window)
+plot(volImpulse ? 1.0 : 0.0, "QFS impulso on", display = display.data_window)
+
+plotshape(longSig, "QFS LONG", style = shape.triangleup, location = location.belowbar, color = color.new(#00C853, 0), size = size.small)
+plotshape(shortSig, "QFS SHORT", style = shape.triangledown, location = location.abovebar, color = color.new(#FF1744, 0), size = size.small)
+bgcolor(inKill ? na : color.new(#FFB300, 90), title = "Fuera de killzone")
+
+alertcondition(longSig, title = "QFS entrada LONG", message = "QFS LONG: impulso + ADX + dominancia compradora")
+alertcondition(shortSig, title = "QFS entrada SHORT", message = "QFS SHORT: impulso + ADX + dominancia vendedora")
