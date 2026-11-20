@@ -1,0 +1,156 @@
+            eq(lastValue(p['Perfil deltaK']), pf.deltaK),
+            `strong=${lastValue(p['Perfil strong'])} soft=${lastValue(p['Perfil soft'])} adx=${lastValue(p['Perfil adxMin'])}/${lastValue(p['Perfil adxStrong'])} deltaK=${lastValue(p['Perfil deltaK'])}`);
+        const score = lastValue(p['Score cuántico']);
+        check(`perfil "${pf.name}" score en rango y finito`, Number.isFinite(score) && score >= -100 && score <= 100, `score=${score?.toFixed?.(2)}`);
+        seenScores.add(Math.round(score * 100));
+        const tables = tablesOf(ctx);
+        const dash = tables.find((t) => t.rows === 29);
+        const cm = dash ? cellMap(dash) : new Map();
+        const decision = cm.get('0,26') ?? '';
+        const allowed = ['FUERTE COMPRA', 'FUERTE VENTA', 'COMPRA', 'VENTA', 'ESPERAR', 'ESPERAR · SIN VENTAJA', 'CARGANDO DATOS'];
+        check(`perfil "${pf.name}" decisión válida en sintético`, allowed.includes(decision), `decisión="${decision}"`);
+        check(`perfil "${pf.name}" cabecera muestra el perfil`, (cm.get('0,0') ?? '').includes(pf.name === 'Manual' ? 'Manual' : pf.name) || (cm.get('0,0') ?? '').includes('v6'), (cm.get('0,0') ?? '').slice(0, 60));
+    }
+    check('los perfiles cambian el score (no son un alias)', seenScores.size >= 2, `${seenScores.size} scores distintos`);
+
+    // ── real por perfil (BTCUSDT 15m, N=250 > warmup 200) ────────────────────
+    const SYM = 'BTCUSDT', TF = '15m', N = 250;
+    const skipReason = await binancePreflight(SYM, TF);
+    if (skipReason) {
+        skipped++;
+        console.log(`  SKIP  perfiles con datos reales — sin red: ${skipReason}`);
+    } else {
+        for (const pf of PROFILES) {
+            const src = withInputs(SRC, [[FROM, `input.string("${pf.name}", "Perfil de parámetros"`]]);
+            const pine = new PineTS(Provider.Binance, SYM, TF, N);
+            try {
+                await withTimeout(pine.ready(), 90000, `carga klines (${pf.name})`);
+                const ctx = await withTimeout(pine.run(src), 240000, `ejecución real (${pf.name})`);
+                const warns = ctx?.warnings ?? [];
+                check(`real · perfil "${pf.name}" sin warnings`, warns.length === 0, warns.length ? JSON.stringify(warns).slice(0, 200) : 'warnings=0');
+                const p = ctx.plots ?? {};
+                const WARM = 200;
+                const series = ['Delta', 'Delta %', 'CVD', 'Control compradores %', 'ADX', 'Momentum', 'Score cuántico', 'Score base (sin sesión)'];
+                const bad = series.filter((n) => seriesValues(p[n]).slice(WARM).some((v) => typeof v !== 'number' || !Number.isFinite(v)));
+                check(`real · perfil "${pf.name}" cero NaN post-warmup`, bad.length === 0, bad.length ? 'con NaN: ' + bad.join(', ') : `${series.length} series × ${N - WARM} barras`);
+                const dash = tablesOf(ctx).find((t) => t.rows === 29);
+                const decision = dash ? (cellMap(dash).get('0,26') ?? '') : '';
+                const allowed = ['FUERTE COMPRA', 'FUERTE VENTA', 'COMPRA', 'VENTA', 'ESPERAR', 'ESPERAR · SIN VENTAJA', 'CARGANDO DATOS'];
+                check(`real · perfil "${pf.name}" decisión válida`, allowed.includes(decision), `decisión="${decision}"`);
+            } catch (e) {
+                failures++;
+                console.log(`  FAIL  real · perfil "${pf.name}" — ${String(e?.message ?? e).slice(0, 200)}`);
+            }
+        }
+    }
+}
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ESCENARIO 10 · filtro de sesiones Londres/NY (killzones)
+// Sintético: con el filtro OFF el score no se atenúa (score == base) y el panel
+// muestra FILTRO OFF. Con killzones imposibles (p. ej. 0000-0001) el mercado está
+// siempre fuera de sesión: sessMult == penalty y score == base*penalty, sin
+// FUERTE aunque el umbral se supere. Con killzones 24h el mult vuelve a 1.
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n═══ ESCENARIO 10 · sesiones Londres/NY ═══');
+{
+    const FROM_SESS = 'input.bool(true, "Filtrar por sesión Londres/NY"';
+    check('input de filtro de sesión presente', SRC.includes(FROM_SESS));
+    // 10a · filtro OFF: sin atenuación
+    {
+        const src = withInputs(SRC, [[FROM_SESS, 'input.bool(false, "Filtrar por sesión Londres/NY"']]);
+        const ctx = await run(src, 'sesiones OFF (sin atenuación)');
+        const pl = ctx.plots ?? {};
+        const base = lastValue(pl['Score base (sin sesión)']);
+        const adj = lastValue(pl['Score cuántico']);
+        const mult = lastValue(pl['Sesión mult']);
+        check('filtro OFF: score == base', Math.abs(adj - base) < 1e-9, `score=${adj?.toFixed?.(3)} base=${base?.toFixed?.(3)}`);
+        check('filtro OFF: mult == 1', Math.abs(mult - 1) < 1e-9, `mult=${mult}`);
+        const dash = tablesOf(ctx).find((t) => t.rows === 29);
+        const sess = dash ? (cellMap(dash).get('1,24') ?? '') : '';
+        check('panel indica FILTRO OFF', sess.includes('FILTRO OFF'), `sesión="${sess}"`);
+    }
+    // 10b · siempre fuera de sesión: killzones de 1 minuto que el sintético (1h) no pisa
+    {
+        let src = withInputs(SRC, [[FROM_SESS, 'input.bool(true, "Filtrar por sesión Londres/NY"']]);
+        src = withInputs(src, [['input.session("0700-1100", "Killzone Londres"', 'input.session("0000-0001", "Killzone Londres"']]);
+        src = withInputs(src, [['input.session("1230-1600", "Killzone Nueva York"', 'input.session("0000-0001", "Killzone Nueva York"']]);
+        const ctx = await run(src, 'siempre fuera de sesión (0000-0001)');
+        const pl = ctx.plots ?? {};
+        const base = lastValue(pl['Score base (sin sesión)']);
+        const adj = lastValue(pl['Score cuántico']);
+        const mult = lastValue(pl['Sesión mult']);
+        const inkz = lastValue(pl['En killzone']);
+        check('fuera de sesión: En killzone == 0', inkz === 0, `inkill=${inkz}`);
+        check('fuera de sesión: mult == penalty (0.5)', Math.abs(mult - 0.5) < 1e-9, `mult=${mult}`);
+        check('fuera de sesión: score == base × penalty', Math.abs(adj - base * mult) < 1e-6, `score=${adj?.toFixed?.(3)} base=${base?.toFixed?.(3)}`);
+        check('fuera de sesión: score atenuado hacia cero', Math.abs(adj) <= Math.abs(base) + 1e-9, `|${adj?.toFixed?.(2)}| <= |${base?.toFixed?.(2)}|`);
+        const dash = tablesOf(ctx).find((t) => t.rows === 29);
+        const sess = dash ? (cellMap(dash).get('1,24') ?? '') : '';
+        check('panel indica FUERA DE SESIÓN', sess.includes('FUERA DE SESIÓN'), `sesión="${sess}"`);
+        // Bloqueo de FUERTE: con umbrales bajos la base superaría el umbral fuerte,
+        // pero fuera de sesión la decisión debe degradarse a COMPRA normal.
+        {
+            let low = withInputs(SRC, [['input.string("Auto", "Perfil de parámetros"', 'input.string("Manual", "Perfil de parámetros"']]);
+            low = withInputs(low, [['input.float(60.0, "Umbral señal fuerte"', 'input.float(30.0, "Umbral señal fuerte"']]);
+            low = withInputs(low, [['input.float(30.0, "Umbral señal"', 'input.float(10.0, "Umbral señal"']]);
+            low = withInputs(low, [['input.float(0.5, "Atenuaci', 'input.float(1.0, "Atenuaci']]);
+            low = withInputs(low, [['input.bool(true, "Señal fuerte solo en zona de interés"', 'input.bool(false, "Señal fuerte solo en zona de interés"']]);
+            low = withInputs(low, [['input.session("0700-1100", "Killzone Londres"', 'input.session("0000-0001", "Killzone Londres"']]);
+            low = withInputs(low, [['input.session("1230-1600", "Killzone Nueva York"', 'input.session("0000-0001", "Killzone Nueva York"']]);
+            // Semilla 25: la base de la última barra (~40) supera el umbral fuerte (30).
+            const bars25 = genBars(600, 100, 25);
+            const pineLow = new PineTS(bars25, 'TESTUSD', '1h', bars25.length);
+            const ctxLow = await pineLow.run(low);
+            console.log(`\n▶ bloqueo FUERTE fuera de sesión (penalty=1)`);
+            check('ejecución sin excepción', !!ctxLow);
+            check('sin warnings del runtime', (ctxLow?.warnings ?? []).length === 0);
+            const baseLow = lastValue(ctxLow.plots?.['Score base (sin sesión)']);
+            const adjLow = lastValue(ctxLow.plots?.['Score cuántico']);
+            const dashLow = tablesOf(ctxLow).find((t) => t.rows === 29);
+            const decLow = dashLow ? (cellMap(dashLow).get('0,26') ?? '') : '';
+            check('bloqueo: la base supera el umbral fuerte (30)', Math.abs(baseLow) >= 30, `base=${baseLow?.toFixed?.(2)}`);
+            check('bloqueo: sin atenuar sigue sobre el umbral pero NO es FUERTE', Math.abs(adjLow) >= 30 && !decLow.includes('FUERTE'), `score=${adjLow?.toFixed?.(2)} decisión="${decLow}"`);
+            // Control positivo: la misma configuración DENTRO de sesión sí da FUERTE.
+            let lowIn = low.split('input.session("0000-0001", "Killzone Londres"').join('input.session("0000-2359", "Killzone Londres"');
+            lowIn = lowIn.split('input.session("0000-0001", "Killzone Nueva York"').join('input.session("0000-2359", "Killzone Nueva York"');
+            const pineIn = new PineTS(bars25, 'TESTUSD', '1h', bars25.length);
+            const ctxIn = await pineIn.run(lowIn);
+            const decIn = tablesOf(ctxIn).find((t) => t.rows === 29) ? (cellMap(tablesOf(ctxIn).find((t) => t.rows === 29)).get('0,26') ?? '') : '';
+            check('control: en sesión la misma señal SÍ es FUERTE', decIn.includes('FUERTE'), `decisión="${decIn}"`);
+        }
+    }
+    // 10c · siempre dentro: killzone 24h
+    {
+        let src = withInputs(SRC, [[FROM_SESS, 'input.bool(true, "Filtrar por sesión Londres/NY"']]);
+        src = withInputs(src, [['input.session("0700-1100", "Killzone Londres"', 'input.session("0000-2359", "Killzone Londres"']]);
+        const ctx = await run(src, 'siempre en sesión (0000-2359)');
+        const mult = lastValue(ctx.plots?.['Sesión mult']);
+        const inkz = lastValue(ctx.plots?.['En killzone']);
+        check('en sesión: mult == 1 y killzone == 1', mult === 1 && inkz === 1, `mult=${mult} inkill=${inkz}`);
+        const dash = tablesOf(ctx).find((t) => t.rows === 29);
+        const sess = dash ? (cellMap(dash).get('1,24') ?? '') : '';
+        check('panel indica LONDRES en killzone 24h', sess.includes('LONDRES'), `sesión="${sess}"`);
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ESCENARIO 11 · ciclo de vida del OB (toque → mitigación → invalidación)
+// Sintético 600 barras: el panel debe exponer el estado del OB (VIRGEN/TOCADO/
+// MITIGADO + contadores T/M/I), los plots OB vivos/toques/mitigados/invalidados
+// son finitos, los vivos respetan maxOB y la limpieza deja invalidados >= 0.
+// Además se fuerza la invalidación total (OBs de 1 barra de extensión + cierres
+// que los rompen) para comprobar que las cajas rotas se borran solas.
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n═══ ESCENARIO 11 · ciclo de vida del OB ═══');
+{
+    const ctx = await run(SRC, 'OB por defecto (toque/mitigación/invalidación)');
+    const p = ctx.plots ?? {};
+    for (const n of ['OB vivos', 'OB toques', 'OB mitigados', 'OB invalidados', 'En OB']) {
+        check(`plot "${n}" presente`, n in p);
+    }
+    const vivos = lastValue(p['OB vivos']);
+    const toques = lastValue(p['OB toques']);
+    const mitig = lastValue(p['OB mitigados']);
+    const inval = lastValue(p['OB invalidados']);
