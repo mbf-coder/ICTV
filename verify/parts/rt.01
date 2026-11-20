@@ -1,0 +1,156 @@
+// Verificación de ejecución del indicador con PineTS (LuxAlgo): corre el script
+// real sobre OHLCV sintético y comprueba aserciones sobre plots, panel y tablas.
+// Uso: node verify/verify_runtime.mjs
+import fs from 'node:fs';
+import path from 'node:path';
+
+const FILE = path.resolve('quant-flow/QuantumFlowAnalyzer_v6.pine');
+const SRC = fs.readFileSync(FILE, 'utf8');
+const { PineTS, Provider } = await import('pinets');
+
+// ── datos sintéticos deterministas ───────────────────────────────────────────
+function genBars(n, start = 100, seed0 = 42) {
+    let price = start;
+    let seed = seed0;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+    const bars = [];
+    const t0 = Date.UTC(2025, 0, 1);
+    for (let i = 0; i < n; i++) {
+        const drift = Math.sin(i / 37) * 0.6;
+        const o = price;
+        const c = Math.max(1, o + drift + (rnd() - 0.5) * 1.6);
+        const h = Math.max(o, c) + rnd() * 0.8;
+        const l = Math.min(o, c) - rnd() * 0.8;
+        const v = 500 + rnd() * 2000 + Math.abs(c - o) * 900;
+        bars.push({
+            openTime: t0 + i * 3600_000, open: +o.toFixed(4), high: +h.toFixed(4),
+            low: +l.toFixed(4), close: +c.toFixed(4), volume: +v.toFixed(2),
+            closeTime: t0 + i * 3600_000 + 3599_999, quoteAssetVolume: +(v * c).toFixed(2),
+            numberOfTrades: Math.round(v / 10), takerBuyBaseAssetVolume: +(v / 2).toFixed(2),
+            takerBuyQuoteAssetVolume: +((v / 2) * c).toFixed(2), ignore: 0,
+        });
+        price = c;
+    }
+    return bars;
+}
+
+const BARS = genBars(600);
+
+// ── utilidades ───────────────────────────────────────────────────────────────
+function lastValue(entry) {
+    const d = entry?.data ?? entry;
+    if (!Array.isArray(d)) return undefined;
+    for (let i = d.length - 1; i >= 0; i--) {
+        const v = d[i];
+        if (typeof v === 'number') return v;
+        if (v && typeof v.value === 'number') return v.value;
+    }
+    return undefined;
+}
+
+function tablesOf(ctx) {
+    const raw = ctx.plots?.['__tables__']?.data ?? [];
+    const last = raw[raw.length - 1];
+    return Array.isArray(last?.value) ? last.value : [];
+}
+
+function cellMap(table) {
+    const out = new Map();
+    const cells = table?.cells ?? [];
+    for (let r = 0; r < cells.length; r++) {
+        for (let c = 0; c < (cells[r]?.length ?? 0); c++) {
+            const cell = cells[r][c];
+            if (cell) out.set(`${c},${r}`, String(cell.text ?? cell.value?.text ?? ''));
+        }
+    }
+    return out;
+}
+
+function withInputs(src, replacements) {
+    let out = src;
+    for (const [from, to] of replacements) {
+        if (!out.includes(from)) throw new Error(`No se encontró el input a reemplazar: ${from}`);
+        out = out.split(from).join(to);
+    }
+    return out;
+}
+
+let checks = 0;
+let failures = 0;
+let skipped = 0;
+function check(name, cond, detail = '') {
+    checks++;
+    if (cond) {
+        console.log(`  PASS  ${name}${detail ? ' — ' + detail : ''}`);
+    } else {
+        failures++;
+        console.log(`  FAIL  ${name}${detail ? ' — ' + detail : ''}`);
+    }
+}
+
+function seriesValues(entry) {
+    const d = entry?.data ?? entry;
+    if (!Array.isArray(d)) return [];
+    return d.map((v) => (typeof v === 'number' ? v : (v && typeof v.value === 'number' ? v.value : NaN)));
+}
+
+function withTimeout(promise, ms, label) {
+    let timer;
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`timeout de red (${ms} ms) en ${label}`)), ms);
+        }),
+    ]).finally(() => clearTimeout(timer));
+}
+
+function labelTexts(ctx) {
+    const data = ctx?.plots?.['__labels__']?.data ?? [];
+    return data.flatMap((e) => (e?.value ?? []).map((l) => l?.text ?? ''));
+}
+
+// ── presupuesto de objetos TradingView ───────────────────────────────────────
+// Límites oficiales: 50 por defecto y 500 como techo para labels/lines/boxes
+// (https://www.tradingview.com/pine-script-docs/writing/limitations/).
+// Fallamos al 80 % para dejar margen antes del garbage collector de TV.
+const TV_HARD = 500;
+const BUDGET_RATIO = 0.8;
+
+function declaredLimit(src, name) {
+    const m = src.match(new RegExp(name + '\\s*=\\s*(\\d+)'));
+    return m ? parseInt(m[1], 10) : 50;
+}
+
+function liveCount(ctx, key) {
+    if (key === '__tables__') return tablesOf(ctx).filter((t) => !t?._deleted).length;
+    const data = ctx?.plots?.[key]?.data ?? [];
+    const last = data[data.length - 1];
+    const arr = last?.value ?? [];
+    return arr.filter((o) => !o?._deleted).length;
+}
+
+function capFromWhile(src, arrName, fallback) {
+    const m = src.match(new RegExp('while array\\.size\\(' + arrName + '\\) > (\\d+)'));
+    return m ? parseInt(m[1], 10) : fallback;
+}
+
+// Preflight común a los escenarios con datos reales: devuelve null si hay red
+// o el motivo del SKIP si el proveedor no responde.
+async function binancePreflight(SYM, TF) {
+    try {
+        const probe = new PineTS(Provider.Binance, SYM, TF, 5);
+        await withTimeout(probe.ready(), 60000, 'preflight Binance');
+        if ((probe.data?.length ?? 0) >= 5) return null;
+        return 'el proveedor no devolvió 5 barras';
+    } catch (e) {
+        return String(e?.message ?? e).slice(0, 200);
+    }
+}
+
+async function run(src, label) {
+    const pine = new PineTS(BARS, 'TESTUSD', '1h', BARS.length);
+    const ctx = await pine.run(src);
+    console.log(`\n▶ ${label}`);
+    check('ejecución sin excepción', !!ctx);
+    const warns = ctx?.warnings ?? [];
+    check('sin warnings del runtime', warns.length === 0, warns.length ? JSON.stringify(warns).slice(0, 300) : 'warnings=0');
