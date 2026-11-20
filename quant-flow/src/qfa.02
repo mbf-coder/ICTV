@@ -1,0 +1,165 @@
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  1b · PERFIL ACTIVO (score, ADX y delta por símbolo y timeframe)
+//  Auto resuelve: ticks → Forex / ticks · diario o superior → Acciones e
+//  índices · intradía ≤ 30 min → Cripto intradía · intradía mayor → Cripto swing.
+//  Los perfiles ajustan umbrales (señal fuerte/normal, ADX), pesos del score,
+//  sensibilidad del delta (coeficientes de delta %, CVD y control) y absorción.
+//  Las longitudes de cálculo (EMAs, DI/ADX, momentum, ATR, ventanas) siguen
+//  siendo las de los inputs: el perfil no las toca para no romper el warmup.
+// ═══════════════════════════════════════════════════════════════════════════════
+int   profSec  = timeframe.in_seconds(timeframe.period)
+bool  profTick = syminfo.volumetype == "tick"
+bool  profDwm  = timeframe.isdaily or timeframe.isweekly or timeframe.ismonthly or timeframe.isdwm
+string profKey = profileMode != "Auto" and profileMode != "Manual" ? profileMode : profileMode == "Manual" ? "Manual" : profTick ? "Forex / ticks" : profDwm ? "Acciones e índices" : profSec <= 1800 ? "Cripto intradía" : "Cripto swing"
+
+float effStrongTh = profKey == "Cripto intradía" ? 55.0 : profKey == "Cripto swing" ? 60.0 : profKey == "Forex / ticks" ? 50.0 : profKey == "Acciones e índices" ? 60.0 : strongTh
+float effSoftTh   = profKey == "Cripto intradía" ? 25.0 : profKey == "Cripto swing" ? 30.0 : profKey == "Forex / ticks" ? 25.0 : profKey == "Acciones e índices" ? 30.0 : softTh
+float effAdxMin   = profKey == "Cripto intradía" ? 18.0 : profKey == "Cripto swing" ? 20.0 : profKey == "Forex / ticks" ? 22.0 : profKey == "Acciones e índices" ? 22.0 : adxMin
+float effAdxStr   = profKey == "Cripto intradía" ? 28.0 : profKey == "Cripto swing" ? 30.0 : profKey == "Forex / ticks" ? 32.0 : profKey == "Acciones e índices" ? 35.0 : adxStrong
+int   effWTrend  = profKey == "Cripto intradía" ? 25 : profKey == "Cripto swing" ? 30 : profKey == "Forex / ticks" ? 30 : profKey == "Acciones e índices" ? 30 : wTrend
+int   effWAdx    = profKey == "Cripto intradía" ? 20 : profKey == "Cripto swing" ? 20 : profKey == "Forex / ticks" ? 25 : profKey == "Acciones e índices" ? 20 : wAdx
+int   effWMom    = profKey == "Cripto intradía" ? 15 : profKey == "Cripto swing" ? 15 : profKey == "Forex / ticks" ? 20 : profKey == "Acciones e índices" ? 15 : wMom
+int   effWOF     = profKey == "Cripto intradía" ? 25 : profKey == "Cripto swing" ? 20 : profKey == "Forex / ticks" ? 10 : profKey == "Acciones e índices" ? 20 : wOF
+int   effWStruct = profKey == "Cripto intradía" ? 15 : profKey == "Cripto swing" ? 15 : profKey == "Forex / ticks" ? 15 : profKey == "Acciones e índices" ? 15 : wStruct
+float effOfDK    = profKey == "Cripto intradía" ? 0.35 : profKey == "Cripto swing" ? 0.35 : profKey == "Forex / ticks" ? 0.25 : profKey == "Acciones e índices" ? 0.30 : 0.35
+float effOfCK    = profKey == "Cripto intradía" ? 2.5 : profKey == "Cripto swing" ? 2.5 : profKey == "Forex / ticks" ? 1.5 : profKey == "Acciones e índices" ? 2.0 : 2.5
+float effOfWK    = profKey == "Cripto intradía" ? 1.6 : profKey == "Cripto swing" ? 1.6 : profKey == "Forex / ticks" ? 1.0 : profKey == "Acciones e índices" ? 1.4 : 1.6
+float effAbsorb  = profKey == "Cripto intradía" ? 1.5 : profKey == "Cripto swing" ? 1.8 : profKey == "Forex / ticks" ? 1.3 : profKey == "Acciones e índices" ? 1.6 : absorbVol
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  2 · CÁLCULOS BASE
+// ═══════════════════════════════════════════════════════════════════════════════
+float atrVal   = ta.atr(atrLen)
+// tick seguro: si el símbolo no define mintick (na), math.max propagaría na a todo el panel
+float tickSafe = nz(syminfo.mintick, 1e-10)
+float barRange = math.max(high - low, tickSafe)
+float volMA    = ta.sma(volume, volLen)
+float relVol   = volMA > 0 ? volume / volMA : 0.0
+float ema1     = ta.ema(close, lenE1)
+float ema2     = ta.ema(close, lenE2)
+float ema3     = ta.ema(close, lenE3)
+float ema4     = ta.ema(close, lenE4)
+float vwapVal  = ta.vwap(hlc3)
+float vwapDist = close > 0 ? (close - vwapVal) / close * 100.0 : 0.0
+
+[diP, diM, adxVal] = ta.dmi(diLen, adxLen)
+float momVal   = ta.mom(close, momLen)
+float rocVal   = ta.roc(close, momLen)
+float momAtr   = atrVal > 0 ? momVal / atrVal : 0.0
+float atrPct   = close > 0 ? atrVal / close * 100.0 : 0.0
+float atrMA    = ta.sma(atrVal, 50)
+
+// ── Delta: intrabars con fallback a proxy OHLC ────────────────────────────────
+[ibO, ibH, ibL, ibC, ibV] = request.security_lower_tf(syminfo.tickerid, ltfDelta,
+     [open, high, low, close, volume], ignore_invalid_timeframe = true)
+
+float buyVol  = 0.0
+float sellVol = 0.0
+int   ibAvail = math.min(array.size(ibO), math.min(array.size(ibC), array.size(ibV)))
+int   ibUse   = math.min(ibAvail, maxIB)
+// con 1 solo intrabar el delta se satura a ±100 % (todo el volumen a un lado),
+// así que en ese caso usamos el proxy OHLC, que reparte cuerpo y mechas.
+bool  intrabarOk = deltaMode == "Intrabar" and ibAvail > 1
+
+if intrabarOk
+    float prevC  = open
+    int   lastSg = 0
+    for i = 0 to ibUse - 1
+        float io = array.get(ibO, i)
+        float ic = array.get(ibC, i)
+        float iv = array.get(ibV, i)
+        int   sg = ic > io ? 1 : ic < io ? -1 : ic > prevC ? 1 : ic < prevC ? -1 : lastSg
+        if sg > 0
+            buyVol += iv
+        else if sg < 0
+            sellVol += iv
+        else
+            buyVol  += iv * 0.5
+            sellVol += iv * 0.5
+        prevC  := ic
+        lastSg := sg
+else
+    // proxy OHLC: reparte el volumen entre cuerpo y mechas (reusa barRange, ya limitado por tickSafe)
+    float pBody = close - open
+    float pUp   = high - math.max(open, close)
+    float pDn   = math.min(open, close) - low
+    buyVol  := volume * (math.max(pBody, 0.0) + pDn) / barRange
+    sellVol := volume * (math.max(-pBody, 0.0) + pUp) / barRange
+
+float volTotal = buyVol + sellVol
+float deltaVal = buyVol - sellVol
+float deltaPct = volTotal > 0 ? deltaVal / volTotal * 100.0 : 0.0
+
+// ── CVD ───────────────────────────────────────────────────────────────────────
+var float cvd = 0.0
+float cvdPrev = nz(cvd[1])
+if resetCvd and timeframe.change("D")
+    cvdPrev := 0.0
+cvd := cvdPrev + deltaVal
+
+float buySum    = math.sum(buyVol, ctrlLen)
+float sellSum   = math.sum(sellVol, ctrlLen)
+float flowSum   = buySum + sellSum
+float controlPct = flowSum > 0 ? buySum / flowSum * 100.0 : 50.0
+float cvdSlopePct = flowSum > 0 ? math.sum(deltaVal, ctrlLen) / flowSum * 100.0 : 0.0
+
+// ── Absorción / calidad ───────────────────────────────────────────────────────
+float closePos   = barRange > 0 ? (close - low) / barRange : 0.5
+bool  bullAbsorb = relVol >= effAbsorb and closePos >= 0.65 and deltaVal < 0
+bool  bearAbsorb = relVol >= effAbsorb and closePos <= 0.35 and deltaVal > 0
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  3 · SMC: SWINGS, BOS/CHoCH, ORDER BLOCKS, FVG
+// ═══════════════════════════════════════════════════════════════════════════════
+float ph = ta.pivothigh(high, pivLen, pivLen)
+float pl = ta.pivotlow(low, pivLen, pivLen)
+
+var float sHigh    = na
+var int   sHighBar = na
+var float sLow     = na
+var int   sLowBar  = na
+
+if not na(ph)
+    sHigh    := ph
+    sHighBar := bar_index - pivLen
+if not na(pl)
+    sLow    := pl
+    sLowBar := bar_index - pivLen
+
+bool bosUp = ta.crossover(close, sHigh)
+bool bosDn = ta.crossunder(close, sLow)
+
+var int lastBos   = 0
+var int structure = 0
+
+bool chochUp = bosUp and lastBos == -1
+bool chochDn = bosDn and lastBos == 1
+
+if bosUp
+    lastBos   := 1
+    structure := 1
+if bosDn
+    lastBos   := -1
+    structure := -1
+
+var array<box> obBoxes = array.new<box>(0)
+var array<int> obDirs  = array.new<int>(0)
+var array<bool> obTouched = array.new<bool>(0)
+var array<bool> obMitig   = array.new<bool>(0)
+var int obTouchN   = 0
+var int obMitigN   = 0
+var int obInvalidN = 0
+var string obLastEvent = "—"
+
+if showOB and (bosUp or bosDn)
+    int swingRef = bosUp ? sLowBar : sHighBar
+    int maxBack  = math.min(obLook, bar_index)
+    int lookback = math.min(20, maxBack)
+    if not na(swingRef)
+        lookback := math.max(1, math.min(bar_index - swingRef, maxBack))
+    int obIdx = 0
+    if lookback >= 1
+        for i = 1 to lookback
+            bool opp = bosUp ? close[i] < open[i] : close[i] > open[i]
+            if opp
