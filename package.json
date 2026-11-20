@@ -1,0 +1,14 @@
+{
+  "name": "quantum-flow-analyzer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Verificación del indicador Pine v6 Quantum Flow Analyzer (parser AST, lint v6 y runtime PineTS)",
+  "scripts": {
+    "verify": "bash verify/verify_all.sh",
+    "lint": "python3 verify/pine_v6_lint.py",
+    "runtime": "node verify/verify_runtime.mjs"
+  },
+  "dependencies": {
+    "pinets": "^0.13.1"
+  }
+}

@@ -1,0 +1,15 @@
+# dependencias locales (la suite las instala sola; en CI las instala el workflow)
+.venv/
+node_modules/
+__pycache__/
+*.pyc
+
+# log que genera el workflow al ejecutarse
+verify-report.txt
+
+# espejo de la referencia v6 (lo descarga build_ref.py bajo demanda)
+verify/ref/
+
+# base de firmas v6 generada (~340 KB): no se versiona, verify_all.sh la
+# reconstruye con build_ref.py si falta (ver bloque en verify/verify_all.sh)
+verify/v6_reference.json
