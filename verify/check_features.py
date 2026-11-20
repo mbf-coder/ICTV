@@ -53,6 +53,15 @@ CHECKS = [
     ("FUERTE solo en killzone", r"allowStrong", "falta el bloqueo de FUERTE fuera de sesión"),
     ("sesión visible en el panel", r"Sesión LON/NY[\s\S]*sessTxt", "la sesión no se muestra en el panel"),
     ("backtest: banderas SIG FUERTE exportadas", r"SIG FUERTE COMPRA[\s\S]*SIG FUERTE VENTA", "faltan las banderas de señal para el backtest"),
+    ("modo de panel Completo/Mobile/Predictor", r'input\.string\("Completo", "Modo de panel"', "falta el selector de modo de panel"),
+    ("horizonte de prediccion", r"predHorizon", "falta el horizonte del predictor"),
+    ("RSI de confirmacion", r"ta\.rsi\(", "falta RSI"),
+    ("fuerza de tendencia", r"trendPower", "falta la fuerza de tendencia"),
+    ("direccion de tendencia", r"trendDir", "falta la direccion de tendencia"),
+    ("precio predicho", r"predPrice", "falta el precio predicho"),
+    ("probabilidad direccional", r"probUp", "falta la probabilidad"),
+    ("motivo con pronostico", r"motivoTxt", "el motivo no incluye el pronostico"),
+    ("pie con pronostico mobile", r"pieTxt", "el pie no incluye el pronostico"),
 ]
 
 
