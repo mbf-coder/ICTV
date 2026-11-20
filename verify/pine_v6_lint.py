@@ -54,30 +54,3 @@ ENUM_NAMESPACES = ("text.align_", "size.", "position.", "plot.style_", "label.st
                    "display.", "format.", "font.family_", "barmerge.", "scale.",
                    "order.", "alert.freq_", "hline.style_", "currency.", "session.",
                    "strategy.", "math.")
-
-
-class Finding:
-    __slots__ = ("code", "line", "col", "msg", "severity")
-
-    def __init__(self, code, line, msg, severity="error", col=0):
-        self.code, self.line, self.msg, self.severity, self.col = code, line, msg, severity, col
-
-    def __str__(self):
-        return f"{self.severity.upper():7} {self.code} línea {self.line}: {self.msg}"
-
-
-def line_starts(text):
-    starts = [0]
-    for m in re.finditer("\n", text):
-        starts.append(m.end())
-    return starts
-
-
-def line_of(starts, offset):
-    return bisect.bisect_right(starts, offset)
-
-
-def mask_strings(text):
-    """Sustituye el contenido de los literales por \x01 para poder parsear
-    sin que comas/paréntesis dentro de strings rompan el análisis."""
-    return re.sub(r'"(?:[^"\\]|\\.)*"', '"\x01"', text)
