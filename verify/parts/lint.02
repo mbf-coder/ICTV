@@ -212,3 +212,4 @@
 
             for d in dup:
                 self.add("S011", ln, f"argumento nombrado duplicado en {name}(): {d}")
+
