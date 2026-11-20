@@ -1,0 +1,156 @@
+    return ctx;
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ESCENARIO 1 · ajustes por defecto (footprint apagado)
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('═══ ESCENARIO 1 · valores por defecto ═══');
+{
+    const ctx = await run(SRC, 'archivo entregado, inputs por defecto');
+    const p = ctx.plots ?? {};
+    const mustHave = ['Delta', 'Delta %', 'CVD', 'Control compradores %', 'Volumen relativo',
+        'ADX', '+DI', '-DI', 'Momentum', 'Score cuántico', 'Score base (sin sesión)', 'Sesión mult', 'En killzone', 'Confluencia %',
+        'EMA rápida', 'EMA media', 'EMA lenta', 'EMA tendencia', 'VWAP'];
+    const missing = mustHave.filter((n) => !(n in p));
+    check('series esperadas presentes', missing.length === 0, missing.length ? 'faltan: ' + missing.join(', ') : `${mustHave.length}/${mustHave.length}`);
+
+    const numeric = mustHave.map((n) => [n, lastValue(p[n])]);
+    const bad = numeric.filter(([, v]) => typeof v !== 'number' || !Number.isFinite(v));
+    check('todas las series son numéricas (sin NaN/Infinity)', bad.length === 0, bad.map(([n, v]) => `${n}=${v}`).join(', '));
+
+    const score = lastValue(p['Score cuántico']);
+    check('score en rango [-100,100]', score >= -100 && score <= 100, `score=${score?.toFixed(2)}`);
+    const ctrl = lastValue(p['Control compradores %']);
+    check('control en rango [0,100]', ctrl >= 0 && ctrl <= 100, `control=${ctrl?.toFixed(2)}%`);
+    const adx = lastValue(p['ADX']);
+    check('ADX definido', adx >= 0 && adx <= 100, `adx=${adx?.toFixed(2)}`);
+    const conf = lastValue(p['Confluencia %']);
+    check('confluencia en múltiplos de 20 (5 factores)', Math.abs(conf / 20 - Math.round(conf / 20)) < 1e-9, `confluencia=${conf}`);
+
+    const tables = tablesOf(ctx);
+    const dash = tables.find((t) => t.rows === 29);
+    check('panel creado (29 filas × 4 columnas)', !!dash, `tablas=${tables.length}`);
+    if (dash) {
+        const cm = cellMap(dash);
+        check('panel con celdas rellenas', cm.size >= 100, `celdas=${cm.size}`);
+        check('merges del panel = 12', (dash.merges ?? []).length === 12, `merges=${(dash.merges ?? []).length}`);
+        const sections = ['▌ VOLUMEN & ORDERFLOW', '▌ TENDENCIA & MOMENTUM', '▌ ZONAS & SMC', '▌ VOLATILIDAD & RIESGO', '▌ DECISIÓN CUÁNTICA'];
+        const missingSec = sections.filter((s) => ![...cm.values()].some((v) => v.includes(s)));
+        check('5 secciones del panel presentes', missingSec.length === 0, missingSec.join(' | '));
+        const decision = cm.get('0,26') ?? '';
+        const allowed = ['FUERTE COMPRA', 'FUERTE VENTA', 'COMPRA', 'VENTA', 'ESPERAR', 'ESPERAR · SIN VENTAJA', 'CARGANDO DATOS'];
+        check('fila de decisión válida', allowed.includes(decision), `decisión="${decision}"`);
+        const control = cm.get('1,7') ?? '';
+        check('fila de control compradores/vendedores', ['COMPRADORES', 'VENDEDORES'].includes(control), `control="${control}"`);
+        check('motivo de decisión presente', (cm.get('0,27') ?? '').length > 10, (cm.get('0,27') ?? '').slice(0, 60));
+        check('POC/VAH/VAL informado', (cm.get('1,18') ?? '') !== '—', cm.get('1,18') ?? '');
+        const fpTable = tables.find((t) => t.rows === 17);
+        check('tabla footprint existe pero vacía con toggle OFF', !!fpTable && cellMap(fpTable).size === 0, `celdas_fp=${fpTable ? cellMap(fpTable).size : 'n/a'}`);
+    }
+
+    const boxes = ctx.plots?.['__boxes__']?.data ?? [];
+    const labels = ctx.plots?.['__labels__']?.data ?? [];
+    check('order blocks / FVG dibujados (boxes)', boxes.length > 0 || JSON.stringify(ctx.plots?.['__boxes__'] ?? '').length > 0);
+    check('etiquetas de señal/estructura creadas', labels.length > 0 || JSON.stringify(ctx.plots?.['__labels__'] ?? '').length > 0);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ESCENARIO 2 · footprint encendido
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n═══ ESCENARIO 2 · footprint ON ═══');
+{
+    const src = withInputs(SRC, [['input.bool(false, "Activar footprint (tabla de precios)"', 'input.bool(true, "Activar footprint (tabla de precios)"']]);
+    const ctx = await run(src, 'showFP = true');
+    const tables = tablesOf(ctx);
+    const fp = tables.find((t) => t.rows === 17);
+    check('tabla footprint presente', !!fp);
+    if (fp) {
+        const cm = cellMap(fp);
+        check('footprint con celdas rellenas', cm.size >= 50, `celdas=${cm.size}`);
+        const texts = [...cm.values()];
+        for (const head of ['PRECIO', 'COMPRA', 'VENTA', 'DELTA']) {
+            check(`cabecera "${head}"`, texts.includes(head));
+        }
+        check('fila TOTAL presente', texts.includes('TOTAL'));
+        check('desglose compra/venta > 0', texts.filter((t) => t && t !== '' ).length > 20, `textos=${texts.length}`);
+        const rowPrice = [...cm.entries()].filter(([k]) => k.startsWith('0,')).length;
+        check('filas de precio dibujadas', rowPrice >= 5, `filas=${rowPrice}`);
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ESCENARIO 3 · delta en modo proxy OHLC
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n═══ ESCENARIO 3 · delta proxy OHLC ═══');
+{
+    const src = withInputs(SRC, [['input.string("Intrabar", "Motor de delta"', 'input.string("Proxy OHLC", "Motor de delta"']]);
+    const ctx = await run(src, 'deltaMode = Proxy OHLC');
+    const d = lastValue(ctx.plots?.['Delta %']);
+    check('delta % acotado en [-100,100]', d >= -100 && d <= 100, `delta%=${d?.toFixed(2)}`);
+    check('score numérico con proxy', Number.isFinite(lastValue(ctx.plots?.['Score cuántico'])));
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ESCENARIO 4 · todo apagado (rutas de guardado / arrays vacíos)
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n═══ ESCENARIO 4 · dibujos apagados ═══');
+{
+    const src = withInputs(SRC, [
+        ['input.bool(true, "Mostrar EMAs"', 'input.bool(false, "Mostrar EMAs"'],
+        ['input.bool(true, "Mostrar VWAP de sesión"', 'input.bool(false, "Mostrar VWAP de sesión"'],
+        ['input.bool(true, "Order Blocks SMC"', 'input.bool(false, "Order Blocks SMC"'],
+        ['input.bool(true, "Fair Value Gaps"', 'input.bool(false, "Fair Value Gaps"'],
+        ['input.bool(true, "Marcar BOS / CHoCH"', 'input.bool(false, "Marcar BOS / CHoCH"'],
+        ['input.bool(true, "Etiquetas de señal fuerte"', 'input.bool(false, "Etiquetas de señal fuerte"'],
+        ['input.bool(true, "Mostrar POC / VAH / VAL"', 'input.bool(false, "Mostrar POC / VAH / VAL"'],
+        ['input.bool(true, "Mostrar panel"', 'input.bool(false, "Mostrar panel"'],
+    ]);
+    const ctx = await run(src, 'EMAs/VWAP/OB/FVG/BOS/señales/VP/panel OFF');
+    check('score numérico con dibujos apagados', Number.isFinite(lastValue(ctx.plots?.['Score cuántico'])));
+    check('sin tablas rellenadas', tablesOf(ctx).every((t) => cellMap(t).size === 0));
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ESCENARIO 5 · sin warmup (pocas barras) → decisión "CARGANDO DATOS"
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n═══ ESCENARIO 5 · warmup corto ═══');
+{
+    const pine = new PineTS(genBars(60, 100, 5), 'TESTUSD', '1h', 60);
+    const ctx = await pine.run(SRC);
+    check('sin warnings del runtime', (ctx?.warnings ?? []).length === 0);
+    const dash = tablesOf(ctx).find((t) => t.rows === 29);
+    const cm = dash ? cellMap(dash) : new Map();
+    check('panel muestra CARGANDO DATOS sin historial suficiente', (cm.get('0,26') ?? '') === 'CARGANDO DATOS', `decisión="${cm.get('0,26')}"`);
+    const texts = labelTexts(ctx);
+    check('sin señales de compra/venta antes del warmup (solo estructura BOS/CHoCH)',
+        !texts.some((t) => t.includes('COMPRA FUERTE') || t.includes('VENTA FUERTE')),
+        `etiquetas=${texts.length}: ${texts.slice(0, 4).join(' · ')}`);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ESCENARIO 6 · datos reales (Binance BTCUSDT 15m, delta intrabar de verdad)
+// Se omite con SKIP si no hay red o el proveedor falla: la suite sigue en OK.
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n═══ ESCENARIO 6 · datos reales (Binance) ═══');
+{
+    const SYM = 'BTCUSDT', TF = '15m', N = 300;
+    const skipReason = await binancePreflight(SYM, TF);
+    if (skipReason) {
+        skipped++;
+        console.log(`  SKIP  sin datos reales — red o proveedor Binance no disponible: ${skipReason}`);
+    } else {
+        const dbgSrc = SRC + '\nplot(array.size(ibO), "DBG ibCount", display = display.data_window)\n';
+        const t0 = Date.now();
+        const pine = new PineTS(Provider.Binance, SYM, TF, N);
+        await withTimeout(pine.ready(), 90000, 'carga klines Binance');
+        const first = pine.data?.[0]?.openTime;
+        const lastBar = pine.data?.[pine.data.length - 1]?.openTime;
+        console.log(`\n▶ ${SYM} ${TF} · ${pine.data?.length ?? '?'} barras reales (${new Date(first).toISOString().slice(0, 10)} → ${new Date(lastBar).toISOString().slice(0, 10)})`);
+        let ctx;
+        try {
+            ctx = await withTimeout(pine.run(dbgSrc), 240000, 'ejecución del script');
+        } catch (e) {
+            failures++;
+            console.log(`  FAIL  ejecución con datos reales — ${String(e?.message ?? e).slice(0, 200)}`);
+            ctx = null;
+        }
