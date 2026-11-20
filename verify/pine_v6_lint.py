@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+"""Validador estático de Pine Script v6 para QuantumFlowAnalyzer_v6.pine.
+
+Compara cada llamada del script contra las firmas reales extraídas de la
+referencia oficial v6 (verify/v6_reference.json, generado por build_ref.py) y
+aplica las reglas de tipos/migración de v6.
+
+Uso:  python3 verify/pine_v6_lint.py [archivo.pine]
+Salida: informe por categoría + lista archivo:línea. Exit 0 solo si errores == 0.
+
+Códigos
+  S0xx sintaxis/estructura      V1xx migración y reglas v6
+  T2xx tipos                    R3xx estructura del script
+"""
+import bisect
+import json
+import os
+import re
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REF_PATH = os.path.join(HERE, "v6_reference.json")
+DEFAULT_TARGET = os.path.join(HERE, "..", "quant-flow", "QuantumFlowAnalyzer_v6.pine")
+
+# argumentos mínimos curados (la referencia no marca "required" de forma fiable
+# en todos los casos; sólo se exige lo que Pine rechaza con seguridad)
+MIN_ARGS = {
+    "indicator": 0, "strategy": 0, "plot": 1, "plotshape": 1, "plotchar": 1,
+    "table.new": 3, "table.cell": 3, "table.merge_cells": 5, "table.delete": 1,
+    "box.new": 2, "box.delete": 1, "line.new": 2, "line.delete": 1,
+    "label.new": 2, "label.delete": 1, "array.new": 0, "array.push": 2,
+    "array.get": 2, "array.set": 3, "array.shift": 1, "array.remove": 2,
+    "alertcondition": 1, "request.security_lower_tf": 3, "request.security": 3,
+    "input.int": 1, "input.float": 1, "input.bool": 1, "input.string": 1,
+    "input.timeframe": 1, "input.color": 1, "str.tostring": 1, "str.format": 1,
+    "math.max": 2, "math.min": 2, "math.round": 1, "math.abs": 1,
+    "ta.sma": 2, "ta.ema": 2, "ta.rma": 2, "ta.atr": 1, "ta.dmi": 2,
+    "ta.mom": 2, "ta.roc": 2, "ta.vwap": 1, "ta.highest": 2, "ta.lowest": 2,
+    "ta.pivothigh": 3, "ta.pivotlow": 3, "ta.crossover": 2, "ta.crossunder": 2,
+    "color.new": 1, "color.rgb": 3, "timeframe.change": 1,
+}
+
+# funciones permitidas como "cast"/constructor de tipos
+CASTS = {"float", "int", "bool", "string", "color", "line", "label", "box", "table",
+         "array", "matrix", "map", "polyline", "linefill", "chart.point",
+         "series", "simple", "const", "input"}
+
+KEYWORDS = {"if", "else", "for", "while", "switch", "and", "or", "not", "in", "to",
+            "by", "break", "continue", "var", "varip", "import", "export", "type",
+            "method", "enum", "true", "false", "na", "return"}
+
+ENUM_NAMESPACES = ("text.align_", "size.", "position.", "plot.style_", "label.style_",
+                   "line.style_", "shape.", "location.", "extend.", "xloc.", "yloc.",
+                   "display.", "format.", "font.family_", "barmerge.", "scale.",
+                   "order.", "alert.freq_", "hline.style_", "currency.", "session.",
+                   "strategy.", "math.")
