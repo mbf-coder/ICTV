@@ -1,0 +1,156 @@
+        if (ctx) {
+            const warns = ctx?.warnings ?? [];
+            check('sin warnings del runtime', warns.length === 0, warns.length ? JSON.stringify(warns).slice(0, 300) : 'warnings=0');
+            const p = ctx.plots ?? {};
+            const WARM = 200; // > lenE4 (200) y > ctrlLen: a partir de aquí la decisión es operativa
+            const ibCount = seriesValues(p['DBG ibCount']).slice(-60);
+            const ibLast10 = ibCount.slice(-10).sort((a, b) => a - b);
+            const ibMedian10 = ibLast10[Math.floor(ibLast10.length / 2)];
+            check('delta calculado con varios intrabars por vela (mediana últimas 10 ≥ 5, máx 60 ≥ 10)',
+                ibMedian10 >= 5 && Math.max(...ibCount) >= 10,
+                `ibCount: min=${Math.min(...ibCount)} mediana10=${ibMedian10} máx=${Math.max(...ibCount)}`);
+            const ibMulti = ibCount.filter((v) => v > 1).length;
+            check('la mayoría de velas usan >1 intrabar (no es el proxy)', ibMulti >= Math.ceil(ibCount.length * 0.5),
+                `${ibMulti}/${ibCount.length} velas`);
+            const dpct = seriesValues(p['Delta %']).slice(-60);
+            const notSaturated = dpct.filter((v) => Number.isFinite(v) && Math.abs(v) < 100 - 1e-9).length;
+            check('delta % con distribución real (≥80% de las últimas 60 sin saturar ±100)',
+                notSaturated >= 48, `${notSaturated}/60 no saturadas`);
+            const mustHave = ['Delta', 'Delta %', 'CVD', 'Control compradores %', 'Volumen relativo',
+                'ADX', '+DI', '-DI', 'Momentum', 'Score cuántico', 'Confluencia %'];
+            const warmFinite = mustHave.map((n) => [n, seriesValues(p[n]).slice(WARM)]);
+            const bad = warmFinite.filter(([, arr]) => arr.some((v) => typeof v !== 'number' || !Number.isFinite(v)));
+            check('cero NaN/Infinity post-warmup en todas las series', bad.length === 0,
+                bad.length ? 'con NaN: ' + bad.map(([n]) => n).join(', ') : `11 series × ${seriesValues(p['Delta']).length - WARM} barras`);
+            const score = lastValue(p['Score cuántico']);
+            check('score en rango [-100,100]', score >= -100 && score <= 100, `score=${score?.toFixed(2)}`);
+            const ctrl = lastValue(p['Control compradores %']);
+            check('control en rango [0,100]', ctrl >= 0 && ctrl <= 100, `control=${ctrl?.toFixed(2)}%`);
+            const tables = tablesOf(ctx);
+            const dash = tables.find((t) => t.rows === 29);
+            check('panel completo con datos reales', !!dash && cellMap(dash).size >= 100, `celdas=${dash ? cellMap(dash).size : 0}`);
+            if (dash) {
+                const cm = cellMap(dash);
+                const decision = cm.get('0,26') ?? '';
+                const allowed = ['FUERTE COMPRA', 'FUERTE VENTA', 'COMPRA', 'VENTA', 'ESPERAR', 'ESPERAR · SIN VENTAJA', 'CARGANDO DATOS'];
+                check('decisión válida con datos reales', allowed.includes(decision), `decisión="${decision}"`);
+                const volType = cm.get('3,1') ?? '';
+                check('volumen real en spot (no TICK VOL)', ['VOL REAL', 'VOL QUOTE'].includes(volType), `tipo="${volType}"`);
+                check('control compradores/vendedores', ['COMPRADORES', 'VENDEDORES'].includes(cm.get('1,7') ?? ''), `control="${cm.get('1,7')}"`);
+            }
+            console.log(`  info  ejecución total del escenario: ${Date.now() - t0} ms`);
+        }
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ESCENARIO 7 · footprint con datos reales (footprint ON)
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n═══ ESCENARIO 7 · footprint con datos reales ═══');
+{
+    const SYM = 'BTCUSDT', TF = '15m', N = 300;
+    const skipReason = await binancePreflight(SYM, TF);
+    if (skipReason) {
+        skipped++;
+        console.log(`  SKIP  sin datos reales — red o proveedor Binance no disponible: ${skipReason}`);
+    } else {
+        const src = withInputs(SRC, [['input.bool(false, "Activar footprint (tabla de precios)"', 'input.bool(true, "Activar footprint (tabla de precios)"']]);
+        const t0 = Date.now();
+        const pine = new PineTS(Provider.Binance, SYM, TF, N);
+        try {
+            await withTimeout(pine.ready(), 90000, 'carga klines Binance (footprint)');
+            const ctx = await withTimeout(pine.run(src), 240000, 'ejecución con footprint');
+            const warns = ctx?.warnings ?? [];
+            check('sin warnings del runtime', warns.length === 0, warns.length ? JSON.stringify(warns).slice(0, 300) : 'warnings=0');
+            const fp = tablesOf(ctx).find((t) => t.rows === 17);
+            check('tabla footprint presente con datos reales', !!fp);
+            if (fp) {
+                const texts = [...cellMap(fp).values()];
+                check('footprint con desglose real por niveles', cellMap(fp).size >= 30 && texts.includes('TOTAL'),
+                    `celdas=${cellMap(fp).size}`);
+            }
+            console.log(`  info  ejecución total del escenario: ${Date.now() - t0} ms`);
+        } catch (e) {
+            failures++;
+            console.log(`  FAIL  footprint con datos reales — ${String(e?.message ?? e).slice(0, 200)}`);
+        }
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ESCENARIO 8 · presupuesto de objetos TradingView (labels/boxes/lines/tablas)
+// Peor caso: todo dibujado + footprint ON sobre 600 barras. Falla si el uso
+// vivo o el tope estático del código supera el 80 % del límite declarado.
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n═══ ESCENARIO 8 · presupuesto de objetos ═══');
+{
+    const limLabels = declaredLimit(SRC, 'max_labels_count');
+    const limLines = declaredLimit(SRC, 'max_lines_count');
+    const limBoxes = declaredLimit(SRC, 'max_boxes_count');
+    check('límite declarado de labels dentro del techo TV (≤500)', limLabels >= 1 && limLabels <= TV_HARD, `max_labels_count=${limLabels}`);
+    check('límite declarado de lines dentro del techo TV (≤500)', limLines >= 1 && limLines <= TV_HARD, `max_lines_count=${limLines}`);
+    check('límite declarado de boxes dentro del techo TV (≤500)', limBoxes >= 1 && limBoxes <= TV_HARD, `max_boxes_count=${limBoxes}`);
+
+    const src = withInputs(SRC, [['input.bool(false, "Activar footprint (tabla de precios)"', 'input.bool(true, "Activar footprint (tabla de precios)"']]);
+    const ctx = await run(src, 'todo ON + footprint ON (peor caso)');
+    const nLabels = liveCount(ctx, '__labels__');
+    const nBoxes = liveCount(ctx, '__boxes__');
+    const nLines = liveCount(ctx, '__lines__');
+    const nTables = liveCount(ctx, '__tables__');
+    check('labels vivos bajo el 80 % del límite', nLabels <= limLabels * BUDGET_RATIO, `${nLabels}/${limLabels}`);
+    check('boxes vivos bajo el 80 % del límite', nBoxes <= limBoxes * BUDGET_RATIO, `${nBoxes}/${limBoxes}`);
+    check('lines vivas bajo el 80 % del límite', nLines <= limLines * BUDGET_RATIO, `${nLines}/${limLines}`);
+    check('tablas vivas acotadas (2: panel + footprint, sin fuga por barra)', nTables <= 4, `${nTables} tablas`);
+    check('total dibujos vivos bajo el 80 % del techo TV (~400)', nLabels + nLines + nBoxes <= TV_HARD * BUDGET_RATIO,
+        `total=${nLabels + nLines + nBoxes}`);
+
+    // Topes estáticos del código: aunque el run sintético no llene los arrays,
+    // el peor caso configurable no debe acercarse al límite declarado.
+    const labelCap = capFromWhile(SRC, 'structLabels', 80) + capFromWhile(SRC, 'sigLabels', 60);
+    const boxCap = capFromWhile(SRC, 'obBoxes', 12) + capFromWhile(SRC, 'fvgBoxes', 10);
+    check('tope estático de labels bajo el 80 % del límite', labelCap <= limLabels * BUDGET_RATIO, `tope=${labelCap}/${limLabels}`);
+    check('tope estático de boxes bajo el 80 % del límite', boxCap <= limBoxes * BUDGET_RATIO, `tope=${boxCap}/${limBoxes}`);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ESCENARIO 9 · perfiles de parámetros por símbolo/timeframe
+// Cada perfil debe compilar (run sin excepción ni warnings) y dar series
+// operativas en sintético; con red, cada perfil pasa el escenario real
+// (BTCUSDT 15m, N=250) con decisión válida y cero NaN post-warmup.
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n═══ ESCENARIO 9 · perfiles por símbolo/timeframe ═══');
+{
+    const PROFILES = [
+        { name: 'Cripto intradía', strong: 55, soft: 25, adxMin: 18, adxStr: 28, deltaK: 0.35 },
+        { name: 'Cripto swing', strong: 60, soft: 30, adxMin: 20, adxStr: 30, deltaK: 0.35 },
+        { name: 'Forex / ticks', strong: 50, soft: 25, adxMin: 22, adxStr: 32, deltaK: 0.25 },
+        { name: 'Acciones e índices', strong: 60, soft: 30, adxMin: 22, adxStr: 35, deltaK: 0.30 },
+        { name: 'Manual', strong: 60, soft: 30, adxMin: 20, adxStr: 30, deltaK: 0.35 },
+    ];
+    const FROM = 'input.string("Auto", "Perfil de parámetros"';
+    check('selector de perfil presente en el fuente', SRC.includes(FROM));
+    const seenScores = new Set();
+    for (const pf of PROFILES) {
+        const src = withInputs(SRC, [[FROM, `input.string("${pf.name}", "Perfil de parámetros"`]]);
+        const pine = new PineTS(BARS, 'TESTUSD', '1h', BARS.length);
+        let ctx = null;
+        try {
+            ctx = await pine.run(src);
+        } catch (e) {
+            failures++;
+            console.log(`  FAIL  perfil "${pf.name}" no compila — ${String(e?.message ?? e).slice(0, 200)}`);
+            continue;
+        }
+        checks++;
+        const warns = ctx?.warnings ?? [];
+        if (warns.length === 0) {
+            console.log(`  PASS  perfil "${pf.name}" compila sin warnings`);
+        } else {
+            failures++;
+            console.log(`  FAIL  perfil "${pf.name}" warnings — ${JSON.stringify(warns).slice(0, 200)}`);
+        }
+        const p = ctx.plots ?? {};
+        const eq = (a, b) => Math.abs(a - b) < 1e-9;
+        check(`perfil "${pf.name}" expone sus umbrales (strong/soft/ADX/deltaK)`,
+            eq(lastValue(p['Perfil strong']), pf.strong) && eq(lastValue(p['Perfil soft']), pf.soft) &&
+            eq(lastValue(p['Perfil adxMin']), pf.adxMin) && eq(lastValue(p['Perfil adxStrong']), pf.adxStr) &&
