@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>QFA v6 · Revisor visual OB</title>
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;font-family:ui-monospace,Menlo,Consolas,monospace;background:#0b0e14;color:#e6e9f0}
+.wrap{max-width:1060px;margin:0 auto;padding:24px}
+h1{font-size:20px;margin:0 0 4px}h2{font-size:14px;margin:26px 0 10px;color:#8b93a7;text-transform:uppercase;letter-spacing:.08em}
+p.sub{color:#8b93a7;margin:0 0 16px;font-size:13px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}@media(max-width:800px){.grid{grid-template-columns:1fr}}
+.card{background:#131926;border:1px solid #26314d;border-radius:12px;padding:16px}
+.flow{display:flex;align-items:stretch;gap:0;margin:6px 0 4px;flex-wrap:wrap}
+.stage{flex:1;min-width:140px;padding:10px;border-radius:10px;text-align:center;font-size:13px;border:1px solid #2c3a5e}
+.stage b{display:block;font-size:13px;margin-bottom:4px}
+.s1{background:#1b2a4a}.s2{background:#3a2f10;border-color:#8a6d1c}.s3{background:#123f2c;border-color:#1f7a4d}.s4{background:#471414;border-color:#8a2b2b}
+.arrow{align-self:center;padding:0 8px;color:#8b93a7;font-size:18px}
+canvas{width:100%;height:280px;background:#0d1322;border:1px solid #26314d;border-radius:10px}
+table{width:100%;border-collapse:collapse;font-size:12.5px}td,th{border:1px solid #26314d;padding:7px 9px;text-align:left}
+th{background:#1a2338;color:#8b93a7;font-weight:600}.bull{color:#26a69a}.bear{color:#ef5350}.mut{color:#8b93a7}
+.badge{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;border:1px solid #2c3a5e;background:#16203a}
+.ok{color:#4ade80}.kpi{font-size:22px;font-weight:700}
+.row{display:flex;gap:10px;flex-wrap:wrap}.kpi-card{flex:1;min-width:130px}
+code{background:#0d1322;padding:2px 6px;border-radius:6px;border:1px solid #26314d}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>⚛ Quantum Flow Analyzer v6 · revisor visual del ciclo de vida del OB</h1>
+<p class="sub">Toque → mitigación → invalidación + limpieza automática. Suite verde: <span class="badge ok">✓ TODO OK</span> · 36/36 features · runtime 162/162 · <code>quant-flow/QuantumFlowAnalyzer_v6.pine</code></p>
+
+<h2>1 · Ciclo de vida (qué cambió en el Pine)</h2>
+<div class="card">
+<div class="flow">
+<div class="stage s1"><b>VIRGEN</b>OB creado en el BOS<br><span class="mut">caja opaca 88</span></div><div class="arrow">→</div>
+<div class="stage s2"><b>TOCADO</b>mecha entra en la caja<br><span class="mut">T+1 · caja 78 · evento “tocado”</span></div><div class="arrow">→</div>
+<div class="stage s3"><b>MITIGADO</b>tras toque, el cierre respeta<br><span class="mut">M+1 · caja 60 + borde 2</span></div><div class="arrow">→</div>
+<div class="stage s4"><b>INVALIDADO · LIMPIADO</b>cierre &gt; extremo + 0.2×ATR<br><span class="mut">I+1 · <code>box.delete</code> en la misma vela</span></div>
+</div>
+<p class="sub" style="margin:8px 0 0">Alcista: toca si <code>low ≤ top y high ≥ bot</code>, mitiga si <code>close ≥ bot</code>, invalida si <code>close &lt; bot − 0.2·ATR</code>. Bajista al revés. El borde derecho se auto-extiende (<code>box.set_right</code>) y el tope <code>maxOB</code> expulsa el más viejo. Sin rotos huérfanos.</p>
+</div>
+
+<h2>2 · Estado vivo (último run sintético 600 barras)</h2>
+<div class="row">
+<div class="card kpi-card"><div class="mut">OB vivos</div><div class="kpi">3 <span class="mut" style="font-size:12px">/ tope 12</span></div></div>
+<div class="card kpi-card"><div class="mut">Toques T</div><div class="kpi bull">6</div></div>
+<div class="card kpi-card"><div class="mut">Mitigados M</div><div class="kpi bull">6</div></div>
+<div class="card kpi-card"><div class="mut">Invalidados I</div><div class="kpi bear">3</div></div>
+<div class="card kpi-card"><div class="mut">En OB</div><div class="kpi">0</div></div>
+</div>
+
+<h2>3 · Simulación dibujada (canvas)</h2>
+<div class="card">
+<canvas id="cv" width="1000" height="280"></canvas>
+<p class="sub" style="margin:8px 0 0">Azul = OB alcista. El precio lo toca (T), lo respeta (M → borde grueso), luego lo rompe y la caja desaparece (I · limpiado). Recarga la página para otra semilla.</p>
+</div>
+
+<h2>4 · Dónde verlo en TradingView y en el panel</h2>
+<div class="grid">
+<div class="card"><table>
+<tr><th>Dónde</th><th>Qué verás</th></tr>
+<tr><td>Gráfico</td><td>Cajas OB: virgen tenue → tocada más sólida → mitigada sólida + borde grueso → rota desaparece sola</td></tr>
+<tr><td>Panel fila Zona (1,15)</td><td><code>Order Block ALCISTA · TOCADO/MITIGADO/VIRGEN (3v · T6 M6 I3)</code>; fuera de OB también muestra <code>· OB 3v · T6 M6 I3</code></td></tr>
+<tr><td>Panel motivo (0,27)</td><td>Último evento: <code>OB alcista tocado / mitigado / invalidado · limpiado</code></td></tr>
+<tr><td>Ventana de datos</td><td>Plots <code>OB vivos / OB toques / OB mitigados / OB invalidados / En OB</code></td></tr>
+</table></div>
+<div class="card"><table>
+<tr><th>Verificación</th><th>Resultado</th></tr>
+<tr><td><code>bash verify/verify_all.sh</code></td><td class="ok">exit 0 · TODO OK</td></tr>
+<tr><td>Escenario 11</td><td>OB: plots presentes, vivos ≤ maxOB, M ≤ T, zona expone estado, limpieza con extensión mínima</td></tr>
+<tr><td>Escenario 12 (nuevo)</td><td>Backtest FUERTE H=10: sintético n=31 wr=70.97% MFE=2.56% MAE=0.72% net=1.71% · real BTCUSDT 15m N=500 n=7 (C=1 V=6) wr=57.14% MFE=1.14% MAE=0.75% net=-0.05%</td></tr>
+<tr><td>Features</td><td>36/36 (OB con toque/mitigación/invalidación/limpieza + banderas SIG para backtest)</td></tr>
+<tr><td>Pegar en TV</td><td>Pine Editor → pegar <code>QuantumFlowAnalyzer_v6.pine</code> → Guardar → Añadir al gráfico</td></tr>
+</table></div>
+</div>
+</div>
+<script>
+// Simulación decorativa del ciclo de vida
+const cv=document.getElementById('cv'),x=cv.getContext('2d');
+let seed=7; const rnd=()=>(seed=(seed*1103515245+12345)%2147483648)/2147483648;
+const N=60, P=[]; let p=100;
+for(let i=0;i<N;i++){const o=p,c=Math.max(1,o+(Math.sin(i/9)*1.4)+(rnd()-.5)*2.2);P.push({o,c,h:Math.max(o,c)+rnd(),l:Math.min(o,c)-rnd()});p=c;}
+const lo=Math.min(...P.map(b=>b.l)),hi=Math.max(...P.map(b=>b.l));
+const X=i=>30+i*(940/(N-1)), Y=v=>250-(v-lo)/(hi-lo)*220;
+// OB ficticio entre barras 8..40
+const obT=hi-(hi-lo)*.35, obB=hi-(hi-lo)*.55;
+let touchedAt=-1,mitAt=-1,invAt=-1;
+for(let i=8;i<44;i++){const b=P[i];
+if(touchedAt<0&&b.l<=obT&&b.h>=obB)touchedAt=i;
+if(touchedAt>=0&&mitAt<0&&b.c>=obB)mitAt=i;
+if(mitAt>=0&&b.c<obB-(hi-lo)*.02){invAt=i;break;}}
+if(invAt<0)invAt=43;
+const obEnd=invAt;
+x.fillStyle=touchedAt>=0?(mitAt>=0?'rgba(38,166,154,.30)':'rgba(38,166,154,.18)'):'rgba(38,166,154,.12)';
+x.fillRect(X(8),Y(obT),X(obEnd)-X(8),Y(obB)-Y(obT));
+x.strokeStyle='#26a69a';x.lineWidth=mitAt>=0?3:1.5;x.strokeRect(X(8),Y(obT),X(obEnd)-X(8),Y(obB)-Y(obT));
+x.fillStyle='#8b93a7';x.font='11px monospace';x.fillText('OB alcista · VIRGEN → TOCADO → MITIGADO → INVALIDADO·LIMPIADO',X(8)+6,Y(obT)-8);
+// velas
+P.forEach((b,i)=>{const up=b.c>=b.o;x.strokeStyle=up?'#26a69a':'#ef5350';x.lineWidth=1;
+x.beginPath();x.moveTo(X(i),Y(b.h));x.lineTo(X(i),Y(b.l));x.stroke();
+x.fillStyle=up?'#26a69a':'#ef5350';const y1=Y(Math.max(b.o,b.c)),y2=Y(Math.min(b.o,b.c));
+x.fillRect(X(i)-3,y1,6,Math.max(2,y2-y1));});
+// marcadores
+const mark=(i,txt,col)=>{x.fillStyle=col;x.font='bold 11px monospace';x.fillText(txt,X(i)-8,i%2?18:236);};
+if(touchedAt>0)mark(touchedAt,'▼ TOCA (T+1)','#f0b90b');
+if(mitAt>0)mark(mitAt,'◆ MITIGA (M+1)','#26a69a');
+mark(invAt,'✕ ROMPE → box.delete','#ef5350');
+</script>
+</body>
+</html>
