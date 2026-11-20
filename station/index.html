@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Quantum Flow — Signal Trading Station</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top"><div class="top-in">
+  <div class="brand">⚛ Quantum Flow<small>Signal Trading Station</small></div>
+  <div class="spacer"></div>
+  <select id="symbol" aria-label="Symbol">
+    <option>BTCUSDT</option><option>ETHUSDT</option><option>SOLUSDT</option><option>BNBUSDT</option>
+  </select>
+  <select id="interval" aria-label="Timeframe">
+    <option>15m</option><option selected>1h</option><option>4h</option><option>1d</option>
+  </select>
+  <button id="refresh">Refresh</button>
+  <span id="conn" class="badge">connecting…</span>
+</div></header>
+
+<div class="wrap">
+  <div class="tabs">
+    <button class="tab on" data-view="retail">Retail</button>
+    <button class="tab" data-view="quantum">Quantum trader</button>
+    <button class="tab" data-view="inst">Institutional</button>
+  </div>
+
+  <div class="kpis">
+    <div class="kpi"><div class="l">Price</div><div class="v" id="kPrice">—</div><div class="s" id="kChg">—</div></div>
+    <div class="kpi"><div class="l">Decision</div><div class="v" id="kDec">—</div><div class="s" id="kScore">—</div></div>
+    <div class="kpi"><div class="l">Predicted (H=<span id="kH">5</span>)</div><div class="v" id="kPred">—</div><div class="s" id="kProb">—</div></div>
+    <div class="kpi"><div class="l">Trend</div><div class="v" id="kTrend">—</div><div class="s" id="kForce">—</div></div>
+  </div>
+
+  <div class="grid">
+    <div class="card"><h2>Price · EMAs · predicted</h2><canvas id="chart" width="900" height="320"></canvas>
+      <p class="note" id="chartNote">—</p></div>
+    <div class="card"><h2>Quantum score</h2>
+      <div class="decision"><span class="pill wait" id="pill">WAIT</span>
+        <span class="note" id="sess">—</span></div>
+      <div class="gauge"><div class="mid"></div><div class="mark" id="gmark"></div></div>
+      <div class="gscale"><span>-100</span><span>0</span><span>+100</span></div>
+      <div id="factors"></div>
+    </div>
+  </div>
+
+  <br>
+  <!-- RETAIL -->
+  <section class="view on" id="view-retail"><div class="row2">
+    <div class="card"><h2>Plain-language plan</h2><div id="plan" style="line-height:1.7"></div></div>
+    <div class="card"><h2>Latest signals</h2><div class="feed" id="feed"></div></div>
+  </div></section>
+
+  <!-- QUANTUM -->
+  <section class="view" id="view-quantum"><div class="row2">
+    <div class="card"><h2>Factor breakdown (weights 25/20/15/25/15)</h2><div id="qbreak"></div>
+      <p class="note">tScore = EMA stack · aScore = DI direction × ADX · mScore = momentum/ATR ·
+      ofScore = delta + CVD slope + control · sScore = range position + structure.
+      Confluence = aligned factors / 5.</p></div>
+    <div class="card"><h2>Predictor math</h2><div id="qpred" style="font-family:var(--mono);font-size:13px;line-height:1.9"></div></div>
+  </div></section>
+
+  <!-- INSTITUTIONAL -->
+  <section class="view" id="view-inst"><div class="row2">
+    <div class="card"><h2>Orderflow proxy &amp; sessions</h2><div id="instFlow"></div></div>
+    <div class="card"><h2>Risk &amp; position size</h2>
+      <div class="form">
+        <div><label>Equity (USDT)</label><input id="eq" type="number" value="10000" min="0"></div>
+        <div><label>Risk per trade %</label><input id="risk" type="number" value="1" min="0" max="100" step="0.1"></div>
+      </div>
+      <div class="form"><div><label>Stop</label><select id="stopK"><option value="1">1.0 × ATR</option><option value="1.5" selected>1.5 × ATR</option><option value="2">2.0 × ATR</option></select></div>
+      <div><label>&nbsp;</label><button class="ghost" id="calc">Calculate</button></div></div>
+      <p class="note" id="posOut">—</p>
+    </div>
+  </div></section>
+</div>
+
+<footer>
+  Educational analytics only — not financial advice. Browser engine is a simplified proxy of the
+  <code>quant-flow/QuantumFlowAnalyzer_v6.pine</code> logic (same score weights, predictor and
+  probability formulas); the authoritative signal is the TradingView indicator.
+  Delta/footprint are estimated from price movement, not real bid/ask. Data: Binance public klines
+  with offline synthetic fallback.
+</footer>
+<script src="app.js"></script>
+</body>
+</html>
