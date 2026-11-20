@@ -12,12 +12,13 @@ lanzarlo igual que el CI en local: `PYTHON=python3 NO_COLOR=1 bash verify/verify
 | Script | Qué hace |
 |---|---|
 | `verify_all.sh` | Orquesta los 5 pasos e instala lo que falte (`pynescript`, `pinets`). Si falta `verify/v6_reference.json` (no se versiona), lo reconstruye con `build_ref.py` desde el espejo de la referencia oficial v6. |
-| `parse_pynescript.py` | Parsea el `.pine` con la gramática Pine de `pynescript` (AST real, 323 sentencias / 13 172 nodos). |
+| `parse_pynescript.py` | Parsea cada `.pine` (indicador y estrategia) con la gramática Pine de `pynescript` (AST real). |
 | `build_ref.py` | Descarga el espejo markdown de la referencia oficial v6 y genera `v6_reference.json` (475 funciones con parámetros, tipos y valores enum). Sólo hace falta para regenerar la base. |
-| `pine_v6_lint.py` | Lint estático: contrasta las 374 llamadas del script contra las firmas v6 + reglas de tipos/migración. |
+| `pine_v6_lint.py` | Lint estático: contrasta cada script contra las firmas v6 + reglas de tipos/migración (indicador: 374 llamadas; estrategia: 98). |
 | `selftest_lint.py` | Inyecta 18 defectos conocidos y comprueba que el lint los detecta (evita un validador vacuo). |
 | `verify_runtime.mjs` | 12 escenarios con PineTS (LuxAlgo): 5 sobre 600 barras sintéticas (plots, panel de 29 filas, footprint ON/OFF, proxy, todo apagado, warmup) + presupuesto de objetos TV (labels/boxes/lines/tablas bajo el 80 % del límite) + perfiles por símbolo/timeframe (los 5 compilan en sintético con sus umbrales) + 2 con datos reales de Binance (BTCUSDT 15m: delta con ~15 intrabars por vela, cero NaN post-warmup, `VOL REAL`, footprint) + cada perfil contra datos reales (BTCUSDT 15m, N=250; se omiten con SKIP si no hay red) + filtro de sesiones Londres/NY (OFF, fuera de sesión y en sesión) + ciclo de vida del OB (toque → mitigación → invalidación + limpieza automática) + backtest mínimo de señales FUERTE (nº, win-rate a H=10 y MFE/MAE; sintético determinista + BTCUSDT 15m N=500 con SKIP sin red) + hit-rate direccional del predictor (signo de `predMove = Precio predicho − close` vs retorno real a HP=5, desglose up/down; sintético + BTCUSDT 15m N=500 con SKIP sin red). |
-| `check_features.py` | Checklist de los 36 requisitos funcionales de la misión (incluye perfiles por símbolo/timeframe, filtro de sesiones, ciclo de vida del OB con toque/mitigación/invalidación/limpieza y banderas SIG FUERTE para backtest). |
+| `check_features.py` | Checklist de los 45 requisitos del indicador (perfiles por símbolo/timeframe, filtro de sesiones, ciclo de vida del OB con toque/mitigación/invalidación/limpieza y banderas SIG FUERTE para backtest). |
+| `check_strategy.py` | Checklist de los 23 requisitos de la estrategia (entradas por impulso + ADX + dominancia, score ponderado, salidas ATR/trailing/cierres y riesgo de cuenta). |
 
 ## Falsos positivos encontrados (y por qué se corrigió el validador, no el script)
 
@@ -56,7 +57,7 @@ sandbox es pegar el archivo en el Pine Editor y pulsar *Guardar*.
 
 ## Entregables por partes (ensamblado determinista)
 
-Los tres archivos grandes viven como partes (`verify/parts/lint.*`, `verify/parts/rt.*`,
-`quant-flow/src/qfa.*`) y `verify/assemble.py` los concatena verificando su sha256.
+Los cuatro archivos grandes viven como partes (`verify/parts/lint.*`, `verify/parts/rt.*`,
+`quant-flow/src/qfa.*`, `quant-flow/src/qfs.*`) y `verify/assemble.py` los concatena verificando su sha256.
 `bash verify/verify_all.sh` ensambla primero (paso 0); el CI publica los ensamblados en `main`.
 Para regenerar el `.pine` desde un clon fresco basta con correr la suite.
