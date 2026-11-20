@@ -126,7 +126,7 @@ if showFP and barstate.islast
         color bgS = rs > rb * fpImb ? color.new(cBear, 82) : rBg
         color rdC = rd > 0 ? cBull : rd < 0 ? cBear : cNeut
         string mark = rb > rs * fpImb ? " ▲" : rs > rb * fpImb ? " ▼" : ""
-        fCell(fpTable, 0, r + 1, fPx(px) + mark, cText, rBg, szFP, text.align_right)
+        fCell(fpTable, 0, r + 1, fPx(px) + mark, cText, rBg, szFP, text.align_left)
         fCell(fpTable, 1, r + 1, fVol(rb), cText, bgB, szFP, text.align_right)
         fCell(fpTable, 2, r + 1, fVol(rs), cText, bgS, szFP, text.align_right)
         fCell(fpTable, 3, r + 1, fSigV(rd), rdC, rBg, szFP, text.align_right)
