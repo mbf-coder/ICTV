@@ -29,7 +29,6 @@ code{background:#0d1322;padding:2px 6px;border-radius:6px;border:1px solid #2631
 <div class="wrap">
 <h1>⚛ Quantum Flow Analyzer v6 · revisor visual del ciclo de vida del OB</h1>
 <p class="sub">Toque → mitigación → invalidación + limpieza automática. Suite verde: <span class="badge ok">✓ TODO OK</span> · 36/36 features · runtime 162/162 · <code>quant-flow/QuantumFlowAnalyzer_v6.pine</code></p>
-
 <h2>1 · Ciclo de vida (qué cambió en el Pine)</h2>
 <div class="card">
 <div class="flow">
@@ -40,7 +39,6 @@ code{background:#0d1322;padding:2px 6px;border-radius:6px;border:1px solid #2631
 </div>
 <p class="sub" style="margin:8px 0 0">Alcista: toca si <code>low ≤ top y high ≥ bot</code>, mitiga si <code>close ≥ bot</code>, invalida si <code>close &lt; bot − 0.2·ATR</code>. Bajista al revés. El borde derecho se auto-extiende (<code>box.set_right</code>) y el tope <code>maxOB</code> expulsa el más viejo. Sin rotos huérfanos.</p>
 </div>
-
 <h2>2 · Estado vivo (último run sintético 600 barras)</h2>
 <div class="row">
 <div class="card kpi-card"><div class="mut">OB vivos</div><div class="kpi">3 <span class="mut" style="font-size:12px">/ tope 12</span></div></div>
@@ -49,13 +47,11 @@ code{background:#0d1322;padding:2px 6px;border-radius:6px;border:1px solid #2631
 <div class="card kpi-card"><div class="mut">Invalidados I</div><div class="kpi bear">3</div></div>
 <div class="card kpi-card"><div class="mut">En OB</div><div class="kpi">0</div></div>
 </div>
-
 <h2>3 · Simulación dibujada (canvas)</h2>
 <div class="card">
 <canvas id="cv" width="1000" height="280"></canvas>
 <p class="sub" style="margin:8px 0 0">Azul = OB alcista. El precio lo toca (T), lo respeta (M → borde grueso), luego lo rompe y la caja desaparece (I · limpiado). Recarga la página para otra semilla.</p>
 </div>
-
 <h2>4 · Dónde verlo en TradingView y en el panel</h2>
 <div class="grid">
 <div class="card"><table>
@@ -81,7 +77,7 @@ const cv=document.getElementById('cv'),x=cv.getContext('2d');
 let seed=7; const rnd=()=>(seed=(seed*1103515245+12345)%2147483648)/2147483648;
 const N=60, P=[]; let p=100;
 for(let i=0;i<N;i++){const o=p,c=Math.max(1,o+(Math.sin(i/9)*1.4)+(rnd()-.5)*2.2);P.push({o,c,h:Math.max(o,c)+rnd(),l:Math.min(o,c)-rnd()});p=c;}
-const lo=Math.min(...P.map(b=>b.l)),hi=Math.max(...P.map(b=>b.l));
+const lo=Math.min(...P.map(b=>b.l)),hi=Math.max(...P.map(b=>b.h));
 const X=i=>30+i*(940/(N-1)), Y=v=>250-(v-lo)/(hi-lo)*220;
 // OB ficticio entre barras 8..40
 const obT=hi-(hi-lo)*.35, obB=hi-(hi-lo)*.55;
